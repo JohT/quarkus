@@ -12,6 +12,17 @@ import java.util.concurrent.ExecutionException;
 /**
  * Represents a value expression. It could be a literal such as {@code 'foo'}. It could have a namespace such as {@code data}
  * for {@code data:name}. It could have several parts such as {@code item} and {@code name} for {@code item.name}.
+ * <p>
+ * An expression may have a "type check information" attached. The string has a form of {@code part1[. part2[. ...]} where each
+ * part is one of the following:
+ * <ul>
+ * <li>type info that represents a fully qualified type name (including type parameters) - {@code |TYPE_INFO|<section-hint>};
+ * for example {@code |org.acme.Foo|},
+ * {@code |java.util.List<org.acme.Label>|} and {@code |org.acme.Foo|<for-element>}</li>
+ * <li>property; for example {@code foo} and {@code foo<for-element>}</li>
+ * <li>virtual method; for example {@code foo.call(|org.acme.Bar|)}</li>
+ * </ul>
+ * The first part is either a type info or a namespace placeholder.
  * 
  * @see Evaluator
  */

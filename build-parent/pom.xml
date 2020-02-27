@@ -17,7 +17,7 @@
     <properties>
         <!-- Maven plugin versions -->
         <elasticsearch-maven-plugin.version>6.15</elasticsearch-maven-plugin.version>
-        <elasticsearch-server.version>7.5.0</elasticsearch-server.version>
+        <elasticsearch-server.version>7.6.0</elasticsearch-server.version>
         <scala-maven-plugin.version>4.1.1</scala-maven-plugin.version>
 
         <!-- These properties are needed in order for them to be resolvable by the generated projects -->
@@ -35,7 +35,7 @@
         <graal-sdk.version-for-documentation>19.3.1</graal-sdk.version-for-documentation>
         <rest-assured.version>4.1.1</rest-assured.version>
         <axle-client.version>0.0.12</axle-client.version>
-        <mutiny-client.version>0.0.12</mutiny-client.version>
+        <mutiny-client.version>0.0.13</mutiny-client.version>
         <vertx.version>3.8.5</vertx.version>
 
         <!-- Dev tools -->
@@ -50,7 +50,7 @@
         <!--
         Supported Maven versions, interpreted as a version range
          -->
-        <supported-maven-versions>[3.5.3,)</supported-maven-versions>
+        <supported-maven-versions>[3.6.2,)</supported-maven-versions>
 
         <!-- These 2 properties are used by CreateProjectMojo to add the Maven Wrapper -->
         <proposed-maven-version>3.6.3</proposed-maven-version>
@@ -78,8 +78,9 @@
         <wagon-provider-api.version>3.3.3</wagon-provider-api.version>
 
         <!-- The image to use for tests that run Keycloak -->
-        <!-- IMPORTANT: If this is changed you must also update native-build-steps.yaml to match the version -->
-        <keycloak.docker.image>quay.io/keycloak/keycloak:8.0.1</keycloak.docker.image>
+        <!-- IMPORTANT: If this is changed you must also update
+             native-build-steps.yaml, jvm-build-steps.yaml and .github/workflows/ci-actions.yml to match the version -->
+        <keycloak.docker.image>quay.io/keycloak/keycloak:9.0.0</keycloak.docker.image>
 
         <unboundid-ldap.version>4.0.13</unboundid-ldap.version>
 
