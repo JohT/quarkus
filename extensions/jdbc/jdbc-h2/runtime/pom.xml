@@ -11,7 +11,7 @@
 
     <artifactId>quarkus-jdbc-h2</artifactId>
     <name>Quarkus - JDBC - H2 - Runtime</name>
-    <description>H2 database connector</description>
+    <description>Connect to the H2 database via JDBC</description>
     <dependencies>
         <dependency>
             <groupId>com.h2database</groupId>
@@ -26,6 +26,11 @@
                 Graal compiler not happy with broken classpaths
                 <optional>true</optional>
             -->
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-agroal</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.graalvm.nativeimage</groupId>

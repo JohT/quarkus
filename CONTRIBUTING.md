@@ -32,8 +32,9 @@ All submissions, including submissions by project members, need to be reviewed b
 
 ### Continuous Integration
 
-Because we are all humans, the project uses a continuous integration approach and each pull request triggers a full build.
-Please make sure to monitor the output of the build and act accordingly.
+Because we are all humans, and to ensure Quarkus is stable for everyone, all changes must go through Quarkus continuous integration. Quarkus CI is based on GitHub Actions, which means that everyone has the ability to automatically execute CI in their forks as part of the process of making changes. We ask that all non-trivial changes go through this process, so that the contributor gets immediate feedback, while at the same time keeping our CI fast and healthy for everyone.
+
+The process requires only one additional step to enable Actions on your fork (clicking the green button in the actions tab). [See the full video walkthrough](https://youtu.be/egqbx-Q-Cbg) for more details on how to do this.
 
 ### Tests and documentation are not optional
 
@@ -98,11 +99,13 @@ select the `eclipse.importorder` file as the import order config file.
 
 * Clone the repository: `git clone https://github.com/quarkusio/quarkus.git`
 * Navigate to the directory: `cd quarkus`
+* Set Maven heap to 1.5GB `export MAVEN_OPTS="-Xmx1563m"`
 * Invoke `./mvnw clean install` from the root directory
 
 ```bash
 git clone https://github.com/quarkusio/quarkus.git
 cd quarkus
+export MAVEN_OPTS="-Xmx1563m"
 ./mvnw clean install
 # Wait... success!
 ```
@@ -143,11 +146,40 @@ then change into the `coverage-report` directory and run `mvn package`. The code
 This currently does not work on Windows as it uses a shell script to copy all the classes and files into the code coverage
 module.
 
+## Extensions
+
+### Descriptions
+
+Extensions descriptions (in the `runtime/pom.xml` description or in the YAML `quarkus-extension.yaml`)
+are used to describe the extension and are visible in https://code.quarkus.io.
+Try and pay attention to it.
+Here are a few recommendation guidelines:
+
+- keep it relatively short so that no hover is required to read it
+- describe the function over the technology
+- use an action / verb to start the sentence
+- do no conjugate the action verb (`Connect foo`, not `Connects foo` nor `Connecting foo`)
+- connectors (JDBC / reactive) etc tend to start with Connect
+- do not mention `Quarkus`
+- do not mention `extension`
+- avoid repeating the extension name
+
+Bad examples and the corresponding good example:
+
+- "AWS Lambda" (use "Write AWS Lambda functions")
+- "Extension for building container images with Docker" (use "Build container images with Docker")
+- "PostgreSQL database connector" (use "Connect to the PostgreSQL database via JDBC")
+- "Asynchronous messaging for Reactive Streams" (use "Produce and consume messages and implement event driven and data streaming applications")
+
 ## The small print
 
 This project is an open source project, please act responsibly, be nice, polite and enjoy!
 
 ## Frequently Asked Questions
+
+* The Maven build fails with `OutOfMemoryException`
+
+Set Maven options to use 1.5GB of heap: `export MAVEN_OPTS="-Xmx1563m"`.
 
 * IntelliJ fails to import Quarkus Maven project with `java.lang.OutOfMemoryError: GC overhead limit exceeded` 
 

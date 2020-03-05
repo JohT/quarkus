@@ -16,7 +16,8 @@ public class ReactivePgReloadTest {
     public static final QuarkusDevModeTest test = new QuarkusDevModeTest()
             .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class)
                     .addClass(DevModeResource.class)
-                    .add(new StringAsset("quarkus.datasource.url=vertx-reactive:postgres://localhost:2345/reload_test"),
+                    .add(new StringAsset("quarkus.datasource.db-kind=postgresql\n" +
+                            "quarkus.datasource.reactive.url=vertx-reactive:postgres://localhost:2345/reload_test"),
                             "application.properties"));
 
     @Test
@@ -25,7 +26,7 @@ public class ReactivePgReloadTest {
                 .get("/dev/error")
                 .then()
                 .statusCode(200)
-                .body(Matchers.allOf(Matchers.startsWith("Connection refused"), Matchers.endsWith(":2345")));
+                .body(Matchers.endsWith(":2345"));
 
         test.modifyResourceFile("application.properties", s -> s.replace(":2345", ":5234"));
 
@@ -33,6 +34,6 @@ public class ReactivePgReloadTest {
                 .get("/dev/error")
                 .then()
                 .statusCode(200)
-                .body(Matchers.allOf(Matchers.startsWith("Connection refused"), Matchers.endsWith(":5234")));
+                .body(Matchers.endsWith(":5234"));
     }
 }
