@@ -135,6 +135,9 @@ public class JibProcessor {
         ImageReference imageReference = getImageReference(containerImageConfig, applicationInfo);
 
         if (pushRequested || containerImageConfig.push) {
+            if (!containerImageConfig.registry.isPresent()) {
+                log.info("No container image registry was set, so 'docker.io' will be used");
+            }
             CredentialRetrieverFactory credentialRetrieverFactory = CredentialRetrieverFactory.forImage(imageReference,
                     log::info);
             RegistryImage registryImage = RegistryImage.named(imageReference);
@@ -200,7 +203,7 @@ public class JibProcessor {
             }
 
             return javaContainerBuilder.toContainerBuilder()
-                    .setEnvironment(jibConfig.environmentVariables.orElse(Collections.emptyMap()))
+                    .setEnvironment(jibConfig.environmentVariables)
                     .setCreationTime(Instant.now());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -223,7 +226,7 @@ public class JibProcessor {
                             .build())
                     .setWorkingDirectory(workDirInContainer)
                     .setEntrypoint(entrypoint)
-                    .setEnvironment(jibConfig.environmentVariables.orElse(Collections.emptyMap()))
+                    .setEnvironment(jibConfig.environmentVariables)
                     .setCreationTime(Instant.now());
         } catch (InvalidImageReferenceException e) {
             throw new RuntimeException(e);

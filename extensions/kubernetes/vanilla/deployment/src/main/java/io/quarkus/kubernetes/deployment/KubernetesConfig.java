@@ -117,13 +117,13 @@ public class KubernetesConfig implements PlatformConfiguration {
      * The liveness probe
      */
     @ConfigItem
-    Optional<ProbeConfig> livenessProbe;
+    ProbeConfig livenessProbe;
 
     /**
      * The readiness probe
      */
     @ConfigItem
-    Optional<ProbeConfig> readinessProbe;
+    ProbeConfig readinessProbe;
 
     /**
      * Volume mounts
@@ -193,6 +193,12 @@ public class KubernetesConfig implements PlatformConfiguration {
     @ConfigItem(defaultValue = "kubernetes")
     List<String> deploymentTarget;
 
+    /**
+     * If true, a Kubernetes Ingress will be created
+     */
+    @ConfigItem(defaultValue = "false")
+    boolean expose;
+
     public Optional<String> getPartOf() {
         return partOf;
     }
@@ -258,11 +264,11 @@ public class KubernetesConfig implements PlatformConfiguration {
         return imagePullSecrets;
     }
 
-    public Optional<ProbeConfig> getLivenessProbe() {
+    public ProbeConfig getLivenessProbe() {
         return livenessProbe;
     }
 
-    public Optional<ProbeConfig> getReadinessProbe() {
+    public ProbeConfig getReadinessProbe() {
         return readinessProbe;
     }
 
@@ -306,4 +312,8 @@ public class KubernetesConfig implements PlatformConfiguration {
         return containers;
     }
 
+    @Override
+    public boolean isExpose() {
+        return expose;
+    }
 }

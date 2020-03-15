@@ -79,6 +79,16 @@ public class HttpConfiguration {
     public InsecureRequests insecureRequests;
 
     /**
+     * If this is true (the default) then HTTP/2 will be enabled.
+     *
+     * Note that for browsers to be able to use it HTTPS must be enabled,
+     * and you must be running on JDK11 or above, as JDK8 does not support
+     * ALPN.
+     */
+    @ConfigItem(defaultValue = "true")
+    public boolean http2;
+
+    /**
      * The CORS config
      */
     public CORSConfig cors;
@@ -109,6 +119,15 @@ public class HttpConfiguration {
      */
     @ConfigItem(defaultValue = "30M", name = "idle-timeout")
     public Duration idleTimeout;
+
+    /**
+     * Http connection read timeout for blocking IO. This is the maximum amount of time
+     * a thread will wait for data, before an IOException will be thrown and the connection
+     * closed.
+     *
+     */
+    @ConfigItem(defaultValue = "60s", name = "read-timeout")
+    public Duration readTimeout;
 
     /**
      * Request body related settings

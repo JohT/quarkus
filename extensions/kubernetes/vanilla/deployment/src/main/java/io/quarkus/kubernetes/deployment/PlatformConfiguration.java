@@ -42,9 +42,9 @@ public interface PlatformConfiguration {
 
     Optional<List<String>> getImagePullSecrets();
 
-    Optional<ProbeConfig> getLivenessProbe();
+    ProbeConfig getLivenessProbe();
 
-    Optional<ProbeConfig> getReadinessProbe();
+    ProbeConfig getReadinessProbe();
 
     Map<String, MountConfig> getMounts();
 
@@ -65,6 +65,10 @@ public interface PlatformConfiguration {
     Map<String, ContainerConfig> getInitContainers();
 
     Map<String, ContainerConfig> getContainers();
+
+    default boolean isExpose() {
+        return false;
+    }
 
     default String getConfigName() {
         return getClass().getSimpleName().replaceAll("Config$", "").toLowerCase();
