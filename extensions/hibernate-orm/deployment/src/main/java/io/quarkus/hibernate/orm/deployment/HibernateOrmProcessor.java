@@ -8,6 +8,7 @@ import static org.hibernate.cfg.AvailableSettings.USE_QUERY_CACHE;
 import static org.hibernate.cfg.AvailableSettings.USE_SECOND_LEVEL_CACHE;
 
 import java.io.IOException;
+import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,23 +35,31 @@ import javax.persistence.spi.PersistenceUnitTransactionType;
 
 import org.eclipse.microprofile.metrics.Metadata;
 import org.eclipse.microprofile.metrics.MetricType;
+import org.hibernate.annotations.Proxy;
 import org.hibernate.boot.archive.scan.spi.ClassDescriptor;
+import org.hibernate.bytecode.internal.bytebuddy.BytecodeProviderImpl;
 import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.dialect.DerbyTenSevenDialect;
 import org.hibernate.dialect.MariaDB103Dialect;
 import org.hibernate.dialect.MySQL8Dialect;
 import org.hibernate.dialect.SQLServer2012Dialect;
 import org.hibernate.integrator.spi.Integrator;
+import org.hibernate.internal.util.collections.ArrayHelper;
 import org.hibernate.jpa.boot.internal.ParsedPersistenceXmlDescriptor;
 import org.hibernate.loader.BatchFetchStyle;
+import org.hibernate.proxy.HibernateProxy;
+import org.hibernate.proxy.pojo.bytebuddy.ByteBuddyProxyHelper;
 import org.hibernate.service.spi.ServiceContributor;
 import org.hibernate.tool.hbm2ddl.MultipleLinesSqlCommandExtractor;
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.AnnotationTarget;
+import org.jboss.jandex.AnnotationValue;
+import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.CompositeIndex;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
 import org.jboss.jandex.Indexer;
+import org.jboss.logmanager.Level;
 
 import io.quarkus.agroal.deployment.JdbcDataSourceBuildItem;
 import io.quarkus.agroal.deployment.JdbcDataSourceSchemaReadyBuildItem;
@@ -65,12 +75,14 @@ import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.ApplicationArchivesBuildItem;
 import io.quarkus.deployment.builditem.ArchiveRootBuildItem;
 import io.quarkus.deployment.builditem.BytecodeTransformerBuildItem;
+import io.quarkus.deployment.builditem.CapabilityBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
 import io.quarkus.deployment.builditem.HotDeploymentWatchedFileBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
+import io.quarkus.deployment.builditem.LogCategoryBuildItem;
 import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
@@ -92,8 +104,11 @@ import io.quarkus.hibernate.orm.runtime.boot.scan.QuarkusScanner;
 import io.quarkus.hibernate.orm.runtime.dialect.QuarkusH2Dialect;
 import io.quarkus.hibernate.orm.runtime.dialect.QuarkusPostgreSQL10Dialect;
 import io.quarkus.hibernate.orm.runtime.metrics.HibernateCounter;
+import io.quarkus.hibernate.orm.runtime.proxies.PreGeneratedProxies;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.smallrye.metrics.deployment.spi.MetricBuildItem;
+import net.bytebuddy.description.type.TypeDescription;
+import net.bytebuddy.dynamic.DynamicType;
 
 /**
  * Simulacrum of JPA bootstrap.
@@ -121,6 +136,11 @@ public final class HibernateOrmProcessor {
      */
     HibernateOrmConfig hibernateConfig;
 
+    @BuildStep
+    CapabilityBuildItem capability() {
+        return new CapabilityBuildItem(Capabilities.HIBERNATE_ORM);
+    }
+
     // We do our own enhancement during the compilation phase, so disable any
     // automatic entity enhancement by Hibernate ORM
     // This has to happen before Hibernate ORM classes are initialized: see
@@ -145,7 +165,7 @@ public final class HibernateOrmProcessor {
     }
 
     @SuppressWarnings("unchecked")
-    @BuildStep(loadsApplicationClasses = true)
+    @BuildStep
     @Record(STATIC_INIT)
     public void build(RecorderContext recorderContext, HibernateOrmRecorder recorder,
             List<AdditionalJpaModelBuildItem> additionalJpaModelBuildItems,
@@ -162,6 +182,7 @@ public final class HibernateOrmProcessor {
             BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
             BuildProducer<JpaEntitiesBuildItem> domainObjectsProducer,
             BuildProducer<BeanContainerListenerBuildItem> beanContainerListener,
+            BuildProducer<GeneratedClassBuildItem> generatedClassBuildItemBuildProducer,
             List<HibernateOrmIntegrationBuildItem> integrations,
             LaunchModeBuildItem launchMode) throws Exception {
 
@@ -254,9 +275,92 @@ public final class HibernateOrmProcessor {
                     .add((Class<? extends ServiceContributor>) recorderContext.classProxy(serviceContributorClassName));
         }
 
+        Set<String> entitiesToGenerateProxiesFor = new HashSet<>(domainObjects.getEntityClassNames());
+        for (ParsedPersistenceXmlDescriptor unit : allDescriptors) {
+            entitiesToGenerateProxiesFor.addAll(unit.getManagedClassNames());
+        }
+        PreGeneratedProxies proxyDefinitions = generatedProxies(entitiesToGenerateProxiesFor, compositeIndex,
+                generatedClassBuildItemBuildProducer);
         beanContainerListener
                 .produce(new BeanContainerListenerBuildItem(
-                        recorder.initMetadata(allDescriptors, scanner, integratorClasses, serviceContributorClasses)));
+                        recorder.initMetadata(allDescriptors, scanner, integratorClasses, serviceContributorClasses,
+                                proxyDefinitions)));
+    }
+
+    private PreGeneratedProxies generatedProxies(Set<String> entityClassNames, IndexView combinedIndex,
+            BuildProducer<GeneratedClassBuildItem> generatedClassBuildItemBuildProducer) {
+        //create a map of entity to proxy type
+        PreGeneratedProxies preGeneratedProxies = new PreGeneratedProxies();
+        Map<String, String> proxyAnnotations = new HashMap<>();
+        for (AnnotationInstance i : combinedIndex.getAnnotations(DotName.createSimple(Proxy.class.getName()))) {
+            AnnotationValue proxyClass = i.value("proxyClass");
+            if (proxyClass == null) {
+                continue;
+            }
+            proxyAnnotations.put(i.target().asClass().name().toString(), proxyClass.asClass().name().toString());
+        }
+        try {
+
+            final BytecodeProviderImpl bytecodeProvider = new BytecodeProviderImpl();
+            final ByteBuddyProxyHelper byteBuddyProxyHelper = bytecodeProvider.getByteBuddyProxyHelper();
+
+            for (String entity : entityClassNames) {
+                Set<Class<?>> proxyInterfaces = new HashSet<>();
+                proxyInterfaces.add(HibernateProxy.class); //always added
+                Class<?> mappedClass = Class.forName(entity, false, Thread.currentThread().getContextClassLoader());
+                String proxy = proxyAnnotations.get(entity);
+                if (proxy != null) {
+                    proxyInterfaces.add(Class.forName(proxy, false, Thread.currentThread().getContextClassLoader()));
+                } else if (!isProxiable(mappedClass)) {
+                    //if there is no @Proxy we need to make sure the actual class is proxiable
+                    continue;
+                }
+                for (ClassInfo subclass : combinedIndex.getAllKnownSubclasses(DotName.createSimple(entity))) {
+                    String subclassName = subclass.name().toString();
+                    if (!entityClassNames.contains(subclassName)) {
+                        //not an entity
+                        continue;
+                    }
+                    proxy = proxyAnnotations.get(subclassName);
+                    if (proxy != null) {
+                        proxyInterfaces.add(Class.forName(proxy, false, Thread.currentThread().getContextClassLoader()));
+                    }
+                }
+                DynamicType.Unloaded<?> proxyDef = byteBuddyProxyHelper.buildUnloadedProxy(mappedClass,
+                        toArray(proxyInterfaces));
+
+                for (Entry<TypeDescription, byte[]> i : proxyDef.getAllTypes().entrySet()) {
+                    generatedClassBuildItemBuildProducer
+                            .produce(new GeneratedClassBuildItem(true, i.getKey().getName(), i.getValue()));
+                }
+                preGeneratedProxies.getProxies().put(entity,
+                        new PreGeneratedProxies.ProxyClassDetailsHolder(proxyDef.getTypeDescription().getName(),
+                                proxyInterfaces.stream().map(Class::getName).collect(Collectors.toSet())));
+            }
+
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException(e);
+        }
+        return preGeneratedProxies;
+    }
+
+    private boolean isProxiable(Class<?> mappedClass) {
+        if (Modifier.isFinal(mappedClass.getModifiers())) {
+            return false;
+        }
+        try {
+            mappedClass.getDeclaredConstructor();
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
+        return true;
+    }
+
+    private static Class[] toArray(final Set<Class<?>> interfaces) {
+        if (interfaces == null) {
+            return ArrayHelper.EMPTY_CLASS_ARRAY;
+        }
+        return interfaces.toArray(new Class[interfaces.size()]);
     }
 
     @BuildStep
@@ -669,8 +773,7 @@ public final class HibernateOrmProcessor {
 
                     if (loadScriptPath != null && !Files.isDirectory(loadScriptPath)) {
                         // enlist resource if present
-                        String resourceAsString = root.getArchiveRoot().relativize(loadScriptPath).toString();
-                        resourceProducer.produce(new NativeImageResourceBuildItem(resourceAsString));
+                        resourceProducer.produce(new NativeImageResourceBuildItem(importFile.get()));
                         desc.getProperties().setProperty(AvailableSettings.HBM2DDL_IMPORT_FILES, importFile.get());
                         desc.getProperties().setProperty(AvailableSettings.HBM2DDL_IMPORT_FILES_SQL_EXTRACTOR,
                                 MultipleLinesSqlCommandExtractor.class.getName());
@@ -716,6 +819,13 @@ public final class HibernateOrmProcessor {
         }
     }
 
+    @BuildStep
+    public void produceLoggingCategories(BuildProducer<LogCategoryBuildItem> categories) {
+        if (hibernateConfig.log.bindParam) {
+            categories.produce(new LogCategoryBuildItem("org.hibernate.type.descriptor.sql.BasicBinder", Level.TRACE));
+        }
+    }
+
     private Optional<String> guessDialect(Optional<String> dbKind) {
         // For now select the latest dialect from the driver
         // later, we can keep doing that but also avoid DCE
@@ -753,7 +863,7 @@ public final class HibernateOrmProcessor {
             BuildProducer<GeneratedClassBuildItem> additionalClasses) {
         HibernateEntityEnhancer hibernateEntityEnhancer = new HibernateEntityEnhancer();
         for (String i : domainObjects.getAllModelClassNames()) {
-            transformers.produce(new BytecodeTransformerBuildItem(i, hibernateEntityEnhancer));
+            transformers.produce(new BytecodeTransformerBuildItem(true, i, hibernateEntityEnhancer));
         }
         for (AdditionalJpaModelBuildItem additionalJpaModel : additionalJpaModelBuildItems) {
             String className = additionalJpaModel.getClassName();

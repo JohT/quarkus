@@ -12,7 +12,6 @@ import org.jboss.jandex.Type;
 
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
-import io.quarkus.arc.deployment.BeanContainerListenerBuildItem;
 import io.quarkus.arc.deployment.BeanRegistrationPhaseBuildItem;
 import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.InjectionPointInfo;
@@ -98,7 +97,7 @@ public class DynamodbProcessor {
         additionalBeans.produce(AdditionalBeanBuildItem.unremovableOf(DynamodbClientProducer.class));
     }
 
-    @BuildStep(loadsApplicationClasses = true)
+    @BuildStep
     DynamodbClientBuildItem analyzeDynamodbClientInjectionPoints(BeanRegistrationPhaseBuildItem beanRegistrationPhase,
             BuildProducer<ServiceProviderBuildItem> serviceProvider,
             BuildProducer<NativeImageProxyDefinitionBuildItem> proxyDefinition) {
@@ -146,19 +145,11 @@ public class DynamodbProcessor {
     }
 
     @BuildStep
-    @Record(ExecutionTime.STATIC_INIT)
-    void initializeConfiguration(BuildProducer<BeanContainerListenerBuildItem> containerListenerProducer,
-            DynamodbRecorder recorder) {
-        containerListenerProducer.produce(new BeanContainerListenerBuildItem(recorder.setDynamodbBuildConfig(buildTimeConfig)));
-    }
-
-    @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
     void buildClients(DynamodbClientBuildItem clientBuildItem, DynamodbConfig runtimeConfig, DynamodbRecorder recorder,
             BeanContainerBuildItem beanContainer, ShutdownContextBuildItem shutdown) {
 
         if (clientBuildItem.isCreateSyncClient() || clientBuildItem.isCreateAsyncClient()) {
-            recorder.configureRuntimeConfig(runtimeConfig);
 
             if (clientBuildItem.isCreateSyncClient()) {
                 recorder.createClient(beanContainer.getValue(), shutdown);

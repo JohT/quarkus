@@ -1,5 +1,5 @@
 plugins {
-    id 'com.gradle.plugin-publish' version '0.10.1'
+    id 'com.gradle.plugin-publish' version '0.11.0'
     id 'java-gradle-plugin'
 }
 if (JavaVersion.current().isJava9Compatible()) {
@@ -26,13 +26,11 @@ dependencies {
     implementation "io.quarkus:quarkus-devtools-common:${version}"
     implementation "io.quarkus:quarkus-platform-descriptor-json:${version}"
     implementation "io.quarkus:quarkus-platform-descriptor-resolver-json:${version}"
-    implementation "io.quarkus:quarkus-development-mode:${version}"
+    implementation "io.quarkus:quarkus-core-deployment:${version}"
 
-    testImplementation 'org.mockito:mockito-core:3.2.4'
-    testImplementation 'org.assertj:assertj-core:3.14.0'
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.5.2'
-    testImplementation 'org.junit.jupiter:junit-jupiter-params:5.5.2'
-    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.5.2'
+    testImplementation 'org.mockito:mockito-core:3.3.3'
+    testImplementation 'org.assertj:assertj-core:3.16.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.6.2'
 }
 
 test {
@@ -85,4 +83,8 @@ task functionalTest(type: Test) {
 check {
     // Run the functional tests as part of `check`
     dependsOn(tasks.functionalTest)
+}
+
+wrapper {
+    distributionType = Wrapper.DistributionType.ALL
 }

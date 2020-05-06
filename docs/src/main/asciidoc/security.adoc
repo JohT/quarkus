@@ -71,6 +71,14 @@ The following properties can be used to configure form based auth:
 
 include::{generated-dir}/config/quarkus-vertx-http-config-group-form-auth-config.adoc[opts=optional, leveloffset=+1]
 
+=== Proactive Authentication
+
+By default Quarkus does what we call proactive authentication. This means that if an incoming request has a
+credential then that request will always be authenticated (even if the target page does not require authentication).
+
+This means that requests with an invalid credential will always be rejected, even for public pages. You can change
+this behaviour and only authenticate when required by setting `quarkus.http.auth.proactive=false`.
+
 [#standard-security-annotations]
 == Authorization in REST endpoints and CDI beans using annotations
 
@@ -78,7 +86,7 @@ Quarkus comes with built-in security to allow for Role-Based Access Control (lin
 based on the common security annotations `@RolesAllowed`, `@DenyAll`, `@PermitAll` on REST endpoints and CDI beans.
 An example of an endpoint that makes use of both JAX-RS and Common Security annotations to describe and secure its endpoints is given in <<subject-example>>. Quarkus also provides
 the `io.quarkus.security.Authenticated` annotation that will permit any authenticated user to access the resource
-(equivalent to `@RolesAllowed("*")`).
+(equivalent to `@RolesAllowed("**")`).
 
 [#subject-example]
 .SubjectExposingResource Example

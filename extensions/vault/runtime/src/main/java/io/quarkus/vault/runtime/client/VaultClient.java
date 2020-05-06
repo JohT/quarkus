@@ -11,8 +11,18 @@ import io.quarkus.vault.runtime.client.dto.database.VaultDatabaseCredentials;
 import io.quarkus.vault.runtime.client.dto.kv.VaultKvSecretV1;
 import io.quarkus.vault.runtime.client.dto.kv.VaultKvSecretV2;
 import io.quarkus.vault.runtime.client.dto.kv.VaultKvSecretV2WriteBody;
+import io.quarkus.vault.runtime.client.dto.sys.VaultHealthResult;
+import io.quarkus.vault.runtime.client.dto.sys.VaultInitResponse;
 import io.quarkus.vault.runtime.client.dto.sys.VaultLeasesLookup;
 import io.quarkus.vault.runtime.client.dto.sys.VaultRenewLease;
+import io.quarkus.vault.runtime.client.dto.sys.VaultSealStatusResult;
+import io.quarkus.vault.runtime.client.dto.sys.VaultWrapResult;
+import io.quarkus.vault.runtime.client.dto.totp.VaultTOTPCreateKeyBody;
+import io.quarkus.vault.runtime.client.dto.totp.VaultTOTPCreateKeyResult;
+import io.quarkus.vault.runtime.client.dto.totp.VaultTOTPGenerateCodeResult;
+import io.quarkus.vault.runtime.client.dto.totp.VaultTOTPListKeysResult;
+import io.quarkus.vault.runtime.client.dto.totp.VaultTOTPReadKeyResult;
+import io.quarkus.vault.runtime.client.dto.totp.VaultTOTPValidateCodeResult;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitDecrypt;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitDecryptBody;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitEncrypt;
@@ -68,4 +78,27 @@ public interface VaultClient {
 
     VaultTransitEncrypt rewrap(String token, String keyName, VaultTransitRewrapBody body);
 
+    VaultTOTPCreateKeyResult createTOTPKey(String token, String keyName, VaultTOTPCreateKeyBody vaultTOTPCreateKeyBody);
+
+    VaultTOTPReadKeyResult readTOTPKey(String token, String keyName);
+
+    VaultTOTPListKeysResult listTOTPKeys(String token);
+
+    void deleteTOTPKey(String token, String keyName);
+
+    VaultTOTPGenerateCodeResult generateTOTPCode(String token, String keyName);
+
+    VaultTOTPValidateCodeResult validateTOTPCode(String token, String keyName, String code);
+
+    int systemHealth(boolean isStandByOk, boolean isPerfStandByOk);
+
+    VaultHealthResult systemHealthStatus(boolean isStandByOk, boolean isPerfStandByOk);
+
+    VaultSealStatusResult systemSealStatus();
+
+    VaultInitResponse init(int secretShares, int secretThreshold);
+
+    VaultWrapResult wrap(String token, long ttl, Object object);
+
+    <T> T unwrap(String wrappingToken, Class<T> resultClass);
 }

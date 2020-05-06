@@ -53,12 +53,6 @@ public class OpenshiftConfig implements PlatformConfiguration {
     boolean addBuildTimestamp;
 
     /**
-     * Environment variables to add to all containers
-     */
-    @ConfigItem
-    Map<String, EnvConfig> envVars;
-
-    /**
      * Working directory
      */
     @ConfigItem
@@ -97,10 +91,22 @@ public class OpenshiftConfig implements PlatformConfiguration {
     Map<String, PortConfig> ports;
 
     /**
+     * The number of desired pods
+     */
+    @ConfigItem(defaultValue = "1")
+    Integer replicas;
+
+    /**
      * The type of service that will be generated for the application
      */
     @ConfigItem(defaultValue = "ClusterIP")
     ServiceType serviceType;
+
+    /**
+     * The nodePort to set when serviceType is set to nodePort
+     */
+    @ConfigItem
+    Optional<Integer> nodePort;
 
     /**
      * Image pull policy
@@ -189,7 +195,7 @@ public class OpenshiftConfig implements PlatformConfiguration {
     /**
      * If true, an Openshift Route will be created
      */
-    @ConfigItem(defaultValue = "false")
+    @ConfigItem
     boolean expose;
 
     public Optional<String> getPartOf() {
@@ -217,10 +223,6 @@ public class OpenshiftConfig implements PlatformConfiguration {
         return addBuildTimestamp;
     }
 
-    public Map<String, EnvConfig> getEnvVars() {
-        return envVars;
-    }
-
     public Optional<String> getWorkingDir() {
         return workingDir;
     }
@@ -239,6 +241,10 @@ public class OpenshiftConfig implements PlatformConfiguration {
 
     public Optional<String> getHost() {
         return host;
+    }
+
+    public Integer getReplicas() {
+        return replicas;
     }
 
     public Map<String, PortConfig> getPorts() {
@@ -308,5 +314,44 @@ public class OpenshiftConfig implements PlatformConfiguration {
     @Override
     public boolean isExpose() {
         return false;
+    }
+
+    @Override
+    public String getTargetPlatformName() {
+        return Constants.OPENSHIFT;
+    }
+
+    /**
+     * Environment variables to add to all containers using the old syntax.
+     *
+     * @deprecated Use {@link #env} instead using the new syntax as follows:
+     *             <ul>
+     *             <li>{@code quarkus.kubernetes.env-vars.foo.field=fieldName} becomes
+     *             {@code quarkus.kubernetes.env.fields.foo=fieldName}</li>
+     *             <li>{@code quarkus.kubernetes.env-vars.envvar.value=value} becomes
+     *             {@code quarkus.kubernetes.env.vars.envvar=value}</li>
+     *             <li>{@code quarkus.kubernetes.env-vars.bar.configmap=configName} becomes
+     *             {@code quarkus.kubernetes.env.configmaps=configName}</li>
+     *             <li>{@code quarkus.kubernetes.env-vars.baz.secret=secretName} becomes
+     *             {@code quarkus.kubernetes.env.secrets=secretName}</li>
+     *             </ul>
+     */
+    @ConfigItem
+    @Deprecated
+    Map<String, EnvConfig> envVars;
+
+    /**
+     * Environment variables to add to all containers.
+     */
+    @ConfigItem
+    EnvVarsConfig env;
+
+    @Deprecated
+    public Map<String, EnvConfig> getEnvVars() {
+        return envVars;
+    }
+
+    public EnvVarsConfig getEnv() {
+        return env;
     }
 }

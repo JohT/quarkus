@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import javax.enterprise.context.ContextNotActiveException;
 import javax.enterprise.context.spi.Contextual;
 import javax.enterprise.event.Reception;
 import javax.enterprise.event.TransactionPhase;
@@ -54,18 +55,26 @@ public class ObserverGenerator extends AbstractGenerator {
     static final String OBSERVER_SUFFIX = "_Observer";
     static final String OBSERVERVED_TYPE = "observedType";
     static final String QUALIFIERS = "qualifiers";
+    static final String DECLARING_PROVIDER_SUPPLIER = "declaringProviderSupplier";
 
     private final AnnotationLiteralProcessor annotationLiterals;
-
     private final Predicate<DotName> applicationClassPredicate;
-
     private final PrivateMembersCollector privateMembers;
+    private final ReflectionRegistration reflectionRegistration;
+    private final Set<String> existingClasses;
+    private final Map<ObserverInfo, String> observerToGeneratedName;
 
     public ObserverGenerator(AnnotationLiteralProcessor annotationLiterals, Predicate<DotName> applicationClassPredicate,
-            PrivateMembersCollector privateMembers) {
+            PrivateMembersCollector privateMembers, boolean generateSources, ReflectionRegistration reflectionRegistration,
+            Set<String> existingClasses,
+            Map<ObserverInfo, String> observerToGeneratedName) {
+        super(generateSources);
         this.annotationLiterals = annotationLiterals;
         this.applicationClassPredicate = applicationClassPredicate;
         this.privateMembers = privateMembers;
+        this.reflectionRegistration = reflectionRegistration;
+        this.existingClasses = existingClasses;
+        this.observerToGeneratedName = observerToGeneratedName;
     }
 
     /**
@@ -73,7 +82,7 @@ public class ObserverGenerator extends AbstractGenerator {
      * @param observer
      * @return a collection of resources
      */
-    Collection<Resource> generate(ObserverInfo observer, ReflectionRegistration reflectionRegistration) {
+    Collection<Resource> generate(ObserverInfo observer) {
         // The name of the generated class differs:
         // "org.acme.Foo_Observer_fooMethod_hash" for normal observer where hash represents the signature of the observer method
         // "org.acme.Registrar_Observer_Synthetic_hash" for synthetic observer where hash represents the basic attrs of the observer
@@ -116,12 +125,21 @@ public class ObserverGenerator extends AbstractGenerator {
         // No suffix added at the end of generated name because it's already
         // included in a baseName, e.g. Foo_Observer_fooMethod_hash
 
-        String targetPackage = DotNames.packageName(observer.getBeanClass());
+        String targetPackage;
+        if (observer.isSynthetic()) {
+            targetPackage = DotNames.packageName(observer.getBeanClass());
+        } else {
+            targetPackage = DotNames.packageName(observer.getObserverMethod().declaringClass().name());
+        }
         String generatedName = generatedNameFromTarget(targetPackage, baseName.toString(), "");
+        observerToGeneratedName.put(observer, generatedName);
+        if (existingClasses.contains(generatedName)) {
+            return Collections.emptyList();
+        }
 
         boolean isApplicationClass = applicationClassPredicate.test(observer.getBeanClass());
         ResourceClassOutput classOutput = new ResourceClassOutput(isApplicationClass,
-                name -> name.equals(generatedName) ? SpecialType.OBSERVER : null);
+                name -> name.equals(generatedName) ? SpecialType.OBSERVER : null, generateSources);
 
         // Foo_Observer_fooMethod_hash implements ObserverMethod<T>
         ClassCreator observerCreator = ClassCreator.builder().classOutput(classOutput).className(generatedName)
@@ -221,29 +239,44 @@ public class ObserverGenerator extends AbstractGenerator {
                 .setModifiers(ACC_PUBLIC);
 
         if (observer.isSynthetic()) {
-            // Synthetic observers generate the notify method themselves 
+            // Synthetic observers generate the notify method themselves
             observer.getNotify().accept(notify);
             return;
         }
 
-        AssignableResultHandle declaringProviderInstanceHandle = notify.createVariable(Object.class);
-        AssignableResultHandle ctxHandle = notify.createVariable(CreationalContextImpl.class);
-        ResultHandle declaringProviderSupplierHandle = notify.readInstanceField(
-                FieldDescriptor.of(observerCreator.getClassName(), "declaringProviderSupplier",
-                        Supplier.class.getName()),
-                notify.getThis());
-        ResultHandle declaringProviderHandle = notify.invokeInterfaceMethod(
-                MethodDescriptors.SUPPLIER_GET, declaringProviderSupplierHandle);
-        // It is safe to skip CreationalContext.release() for normal scoped declaring provider and no injection points
-        boolean skipRelease = observer.getDeclaringBean().getScope().isNormal()
-                && observer.getInjection().injectionPoints.isEmpty();
+        boolean isStatic = Modifier.isStatic(observer.getObserverMethod().flags());
+        // It is safe to skip CreationalContext.release() for observers with noor normal scoped declaring provider, and
+        boolean skipRelease = observer.getInjection().injectionPoints.isEmpty();
 
-        // If Reception.IF_EXISTS is used we must check the context of the declaring bean first
-        if (Reception.IF_EXISTS == observer.getReception()) {
-            BeanInfo declaringBean = observer.getDeclaringBean();
-            if (declaringBean != null && !BuiltinScope.DEPENDENT.is(declaringBean.getScope())) {
+        // Declaring bean instance, may be null
+        AssignableResultHandle declaringProviderInstanceHandle = notify.createVariable(Object.class);
+        // This CreationalContext is used for @Dependent instances injected into method parameters
+        ResultHandle ctxHandle = skipRelease ? notify.loadNull()
+                : notify.newInstance(MethodDescriptor.ofConstructor(CreationalContextImpl.class, Contextual.class),
+                        notify.loadNull());
+        AssignableResultHandle declaringProviderCtx = notify.createVariable(CreationalContextImpl.class);
+
+        ResultHandle declaringProviderHandle;
+        if (isStatic) {
+            // For static observers we don't need to obtain the contextual instance of the bean which declares the observer
+            declaringProviderHandle = notify.loadNull();
+        } else {
+            ResultHandle declaringProviderSupplierHandle = notify.readInstanceField(
+                    FieldDescriptor.of(observerCreator.getClassName(), DECLARING_PROVIDER_SUPPLIER,
+                            Supplier.class.getName()),
+                    notify.getThis());
+            declaringProviderHandle = notify.invokeInterfaceMethod(
+                    MethodDescriptors.SUPPLIER_GET, declaringProviderSupplierHandle);
+        }
+
+        if (isStatic) {
+            notify.assign(declaringProviderInstanceHandle, notify.loadNull());
+        } else {
+            if (Reception.IF_EXISTS == observer.getReception()
+                    && !BuiltinScope.DEPENDENT.is(observer.getDeclaringBean().getScope())) {
+                // If Reception.IF_EXISTS is used we must check the context of the declaring bean first
                 ResultHandle container = notify.invokeStaticMethod(MethodDescriptors.ARC_CONTAINER);
-                ResultHandle scope = notify.loadClass(declaringBean.getScope().getDotName().toString());
+                ResultHandle scope = notify.loadClass(observer.getDeclaringBean().getScope().getDotName().toString());
                 ResultHandle context = notify.invokeInterfaceMethod(MethodDescriptors.ARC_CONTAINER_GET_ACTIVE_CONTEXT,
                         container,
                         scope);
@@ -252,28 +285,39 @@ public class ObserverGenerator extends AbstractGenerator {
                         notify.invokeInterfaceMethod(MethodDescriptors.CONTEXT_GET_IF_PRESENT, context,
                                 declaringProviderHandle));
                 BranchResult doesNotExist = notify.ifNull(declaringProviderInstanceHandle);
+                // Notification is no-op
                 doesNotExist.trueBranch().returnValue(null);
-                BytecodeCreator isNotPresent = doesNotExist.falseBranch();
-                isNotPresent.assign(ctxHandle, skipRelease ? isNotPresent.loadNull()
-                        : isNotPresent.newInstance(
-                                MethodDescriptor.ofConstructor(CreationalContextImpl.class, Contextual.class),
+
+            } else if (BuiltinScope.DEPENDENT.is(observer.getDeclaringBean().getScope())) {
+                // Always create a new dependent instance
+                notify.assign(declaringProviderCtx,
+                        notify.newInstance(MethodDescriptor.ofConstructor(CreationalContextImpl.class, Contextual.class),
                                 declaringProviderHandle));
-            }
-        } else {
-            notify.assign(ctxHandle, skipRelease ? notify.loadNull()
-                    : notify.newInstance(MethodDescriptor.ofConstructor(CreationalContextImpl.class, Contextual.class),
-                            declaringProviderHandle));
-            notify.assign(declaringProviderInstanceHandle, notify.invokeInterfaceMethod(
-                    MethodDescriptors.INJECTABLE_REF_PROVIDER_GET, declaringProviderHandle,
-                    ctxHandle));
-            if (observer.getDeclaringBean().getScope().isNormal()) {
-                // We need to unwrap the client proxy
                 notify.assign(declaringProviderInstanceHandle, notify.invokeInterfaceMethod(
-                        MethodDescriptors.CLIENT_PROXY_GET_CONTEXTUAL_INSTANCE,
-                        declaringProviderInstanceHandle));
+                        MethodDescriptors.INJECTABLE_REF_PROVIDER_GET, declaringProviderHandle,
+                        declaringProviderCtx));
+            } else {
+                // Obtain contextual instance for non-dependent beans
+                ResultHandle container = notify.invokeStaticMethod(MethodDescriptors.ARC_CONTAINER);
+                ResultHandle scope = notify.loadClass(observer.getDeclaringBean().getScope().getDotName().toString());
+                ResultHandle context = notify.invokeInterfaceMethod(MethodDescriptors.ARC_CONTAINER_GET_ACTIVE_CONTEXT,
+                        container,
+                        scope);
+                notify.ifNull(context).trueBranch().throwException(ContextNotActiveException.class,
+                        "Context not active: " + observer.getDeclaringBean().getScope().getDotName());
+                notify.assign(declaringProviderInstanceHandle,
+                        notify.invokeInterfaceMethod(MethodDescriptors.CONTEXT_GET_IF_PRESENT, context,
+                                declaringProviderHandle));
+                BytecodeCreator doesNotExist = notify.ifNull(declaringProviderInstanceHandle).trueBranch();
+                doesNotExist.assign(declaringProviderInstanceHandle,
+                        doesNotExist.invokeInterfaceMethod(MethodDescriptors.CONTEXT_GET, context, declaringProviderHandle,
+                                doesNotExist.newInstance(
+                                        MethodDescriptor.ofConstructor(CreationalContextImpl.class, Contextual.class),
+                                        declaringProviderHandle)));
             }
         }
 
+        // Collect all method arguments
         ResultHandle[] referenceHandles = new ResultHandle[observer.getObserverMethod().parameters().size()];
         int eventParamPosition = observer.getEventParameter().position();
         Iterator<InjectionPointInfo> injectionPointsIterator = observer.getInjection().injectionPoints.iterator();
@@ -299,6 +343,7 @@ public class ObserverGenerator extends AbstractGenerator {
         }
 
         if (Modifier.isPrivate(observer.getObserverMethod().flags())) {
+            // Reflection fallback
             privateMembers.add(isApplicationClass,
                     String.format("Observer method %s#%s()", observer.getObserverMethod().declaringClass().name(),
                             observer.getObserverMethod().name()));
@@ -315,8 +360,12 @@ public class ObserverGenerator extends AbstractGenerator {
                     notify.load(observer.getObserverMethod().name()),
                     paramTypesArray, declaringProviderInstanceHandle, argsArray);
         } else {
-            notify.invokeVirtualMethod(MethodDescriptor.of(observer.getObserverMethod()), declaringProviderInstanceHandle,
-                    referenceHandles);
+            if (isStatic) {
+                notify.invokeStaticMethod(MethodDescriptor.of(observer.getObserverMethod()), referenceHandles);
+            } else {
+                notify.invokeVirtualMethod(MethodDescriptor.of(observer.getObserverMethod()), declaringProviderInstanceHandle,
+                        referenceHandles);
+            }
         }
 
         // Destroy @Dependent instances injected into method parameters of an observer method
@@ -324,10 +373,10 @@ public class ObserverGenerator extends AbstractGenerator {
             notify.invokeInterfaceMethod(MethodDescriptors.CREATIONAL_CTX_RELEASE, ctxHandle);
         }
 
-        // If the declaring bean is @Dependent we must destroy the instance afterwards
-        if (BuiltinScope.DEPENDENT.is(observer.getDeclaringBean().getScope())) {
+        // If non-static and the declaring bean is @Dependent we must destroy the instance afterwards
+        if (!isStatic && BuiltinScope.DEPENDENT.is(observer.getDeclaringBean().getScope())) {
             notify.invokeInterfaceMethod(MethodDescriptors.INJECTABLE_BEAN_DESTROY, declaringProviderHandle,
-                    declaringProviderInstanceHandle, ctxHandle);
+                    declaringProviderInstanceHandle, declaringProviderCtx);
         }
 
         notify.returnValue(null);
@@ -336,7 +385,7 @@ public class ObserverGenerator extends AbstractGenerator {
     protected void createProviderFields(ClassCreator observerCreator, ObserverInfo observer,
             Map<InjectionPointInfo, String> injectionPointToProvider) {
         // Declaring bean provider
-        observerCreator.getFieldCreator("declaringProviderSupplier", Supplier.class).setModifiers(ACC_PRIVATE | ACC_FINAL);
+        observerCreator.getFieldCreator(DECLARING_PROVIDER_SUPPLIER, Supplier.class).setModifiers(ACC_PRIVATE | ACC_FINAL);
         // Injection points
         for (String provider : injectionPointToProvider.values()) {
             observerCreator.getFieldCreator(provider, Supplier.class).setModifiers(ACC_PRIVATE | ACC_FINAL);

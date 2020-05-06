@@ -61,23 +61,20 @@ public class ParserTest {
                 + "{foo.name}"
                 + "{#for item in foo.items}"
                 + "{item.name}{bar.name}"
-                + "{/}"
+                + "{/for}"
                 + "{#each labels}"
                 + "{it.name}"
-                + "{/}"
+                + "{/each}"
                 + "{inject:bean.name}"
                 + "{#each inject:bean.labels}"
                 + "{it.value}"
-                + "{/}"
+                + "{/each}"
                 + "{#set baz=foo.bar}"
                 + "{baz.name}"
-                + "{/}"
-                + "{#with foo.bravo as delta}"
-                + "{delta.id}"
-                + "{/}"
+                + "{/set}"
                 + "{#for foo in foos}"
                 + "{foo.baz}"
-                + "{/}"
+                + "{/for}"
                 + "{foo.call(labels,bar)}");
         Set<Expression> expressions = template.getExpressions();
 
@@ -92,8 +89,6 @@ public class ParserTest {
         assertExpr(expressions, "it.value", 2, "bean.labels<for-element>.value");
         assertExpr(expressions, "foo.bar", 2, "|org.acme.Foo|.bar");
         assertExpr(expressions, "baz.name", 2, "|org.acme.Foo|.bar.name");
-        assertExpr(expressions, "foo.bravo", 2, "|org.acme.Foo|.bravo");
-        assertExpr(expressions, "delta.id", 2, "|org.acme.Foo|.bravo.id");
         assertExpr(expressions, "foo.baz", 2, null);
         assertExpr(expressions, "foo.call(labels,bar)", 2, "|org.acme.Foo|.call(labels,bar)");
     }
@@ -161,6 +156,13 @@ public class ParserTest {
                 1);
         assertParserError("{#if (foo || bar}{/}",
                 "Parser error on line 1: unterminated string literal or composite parameter detected for [#if (foo || bar]", 1);
+    }
+
+    @Test
+    public void testWhitespace() {
+        Engine engine = Engine.builder().addDefaults().build();
+        assertEquals("Hello world", engine.parse("{#if true  }Hello {name }{/if  }").data("name", "world").render());
+        assertEquals("Hello world", engine.parse("Hello {name ?: 'world'  }").render());
     }
 
     private void assertParserError(String template, String message, int line) {

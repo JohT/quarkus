@@ -6,14 +6,25 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
+import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.quarkus.annotation.processor.generate_doc.ConfigDocItem;
+
 final public class Constants {
+    public static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    public static TypeReference<List<ConfigDocItem>> LIST_OF_CONFIG_ITEMS_TYPE_REF = new TypeReference<List<ConfigDocItem>>() {
+    };
+
     public static final char DOT = '.';
     public static final String EMPTY = "";
     public static final String DASH = "-";
@@ -41,23 +52,35 @@ final public class Constants {
     public static final String ANNOTATION_CONFIG_ITEM = "io.quarkus.runtime.annotations.ConfigItem";
     public static final String ANNOTATION_BUILD_STEP = "io.quarkus.deployment.annotations.BuildStep";
     public static final String ANNOTATION_CONFIG_ROOT = "io.quarkus.runtime.annotations.ConfigRoot";
+    public static final String ANNOTATION_DEFAULT_CONVERTER = "io.quarkus.runtime.annotations.DefaultConverter";
+    public static final String ANNOTATION_CONVERT_WITH = "io.quarkus.runtime.annotations.ConvertWith";
     public static final String ANNOTATION_CONFIG_GROUP = "io.quarkus.runtime.annotations.ConfigGroup";
     public static final String ANNOTATION_CONFIG_DOC_MAP_KEY = "io.quarkus.runtime.annotations.ConfigDocMapKey";
     public static final String ANNOTATION_CONFIG_DOC_SECTION = "io.quarkus.runtime.annotations.ConfigDocSection";
 
     public static final Set<String> SUPPORTED_ANNOTATIONS_TYPES = new HashSet<>();
     public static final Map<String, String> ALIASED_TYPES = new HashMap<>();
-    public static final String DOCS_SRC_MAIN_ASCIIDOC_GENERATED = "/target/asciidoc/generated/config/";
-    public static final Path GENERATED_DOCS_PATH = Paths
-            .get(System.getProperties().getProperty("maven.multiModuleProjectDirectory")
-                    + Constants.DOCS_SRC_MAIN_ASCIIDOC_GENERATED);
+    private static final Properties SYSTEM_PROPERTIES = System.getProperties();
+
+    private static final String DOCS_SRC_MAIN_ASCIIDOC_GENERATED = "/target/asciidoc/generated/config/";
+    private static final String DOCS_OUT_DIR = System.getProperty("quarkus.docsOutputDir",
+            SYSTEM_PROPERTIES.getProperty("maven.multiModuleProjectDirectory", "."));
+    public static final Path GENERATED_DOCS_PATH = Paths.get(DOCS_OUT_DIR + DOCS_SRC_MAIN_ASCIIDOC_GENERATED).toAbsolutePath();
     public static final File GENERATED_DOCS_DIR = GENERATED_DOCS_PATH.toFile();
+    public static final Boolean SKIP_DOCS_GENERATION = Boolean.valueOf(SYSTEM_PROPERTIES.getProperty("skipDocs", "false"));
 
     /**
-     * Holds the list of configuration items / configuration sections of each configuration roots.
+     * Holds the list of configuration items of each configuration roots.
      */
     public static final File ALL_CR_GENERATED_DOC = GENERATED_DOCS_PATH
             .resolve("all-configuration-roots-generated-doc.properties").toFile();
+
+    /**
+     * Holds the list of configuration items of each configuration groups.
+     * The items in this list may not have complete information as some depend on the configuration root.
+     */
+    public static final File ALL_CG_GENERATED_DOC = GENERATED_DOCS_PATH
+            .resolve("all-configuration-groups-generated-doc.properties").toFile();
 
     /**
      * Holds the list of computed file names and the list of configuration roots of this extension

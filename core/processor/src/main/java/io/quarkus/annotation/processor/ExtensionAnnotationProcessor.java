@@ -236,15 +236,18 @@ public class ExtensionAnnotationProcessor extends AbstractProcessor {
         }
 
         try {
-            final Set<ConfigDocGeneratedOutput> outputs = configDocItemScanner
-                    .scanExtensionsConfigurationItems(javaDocProperties);
-            for (ConfigDocGeneratedOutput output : outputs) {
-                DocGeneratorUtil.sort(output.getConfigDocItems()); // sort before writing
-                configDocWriter.writeAllExtensionConfigDocumentation(output);
+            if (!Constants.SKIP_DOCS_GENERATION) {
+                final Set<ConfigDocGeneratedOutput> outputs = configDocItemScanner
+                        .scanExtensionsConfigurationItems(javaDocProperties);
+                for (ConfigDocGeneratedOutput output : outputs) {
+                    DocGeneratorUtil.sort(output.getConfigDocItems()); // sort before writing
+                    configDocWriter.writeAllExtensionConfigDocumentation(output);
+                }
             }
         } catch (IOException e) {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, "Failed to generate extension doc: " + e);
             return;
+
         }
     }
 
@@ -287,10 +290,6 @@ public class ExtensionAnnotationProcessor extends AbstractProcessor {
                 continue;
             }
 
-            for (VariableElement variableElement : i.getParameters()) {
-                configDocItemScanner.addProcessorClassMember(variableElement.asType().toString());
-            }
-
             final PackageElement pkg = processingEnv.getElementUtils().getPackageOf(clazz);
             if (pkg == null) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
@@ -300,12 +299,6 @@ public class ExtensionAnnotationProcessor extends AbstractProcessor {
 
             final String binaryName = processingEnv.getElementUtils().getBinaryName(clazz).toString();
             if (processorClassNames.add(binaryName)) {
-                // new class
-                for (Element element : clazz.getEnclosedElements()) {
-                    if (element.getKind().isField()) {
-                        configDocItemScanner.addProcessorClassMember(element.asType().toString());
-                    }
-                }
                 recordConfigJavadoc(clazz);
                 generateAccessor(clazz);
                 final StringBuilder rbn = getRelativeBinaryName(clazz, new StringBuilder());

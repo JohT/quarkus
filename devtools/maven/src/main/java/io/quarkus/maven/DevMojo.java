@@ -16,15 +16,18 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Queue;
 import java.util.Set;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
@@ -46,6 +49,7 @@ import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.shared.utils.cli.CommandLineUtils;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
@@ -62,9 +66,11 @@ import org.eclipse.aether.resolution.DependencyResult;
 import org.eclipse.aether.util.artifact.JavaScopes;
 import org.twdata.maven.mojoexecutor.MojoExecutor;
 
+import io.quarkus.bootstrap.model.AppArtifactKey;
+import io.quarkus.bootstrap.resolver.maven.options.BootstrapMavenOptions;
 import io.quarkus.bootstrap.resolver.maven.workspace.LocalProject;
-import io.quarkus.dev.DevModeContext;
-import io.quarkus.dev.DevModeMain;
+import io.quarkus.deployment.dev.DevModeContext;
+import io.quarkus.deployment.dev.DevModeMain;
 import io.quarkus.maven.components.MavenVersionEnforcer;
 import io.quarkus.maven.utilities.MojoUtils;
 import io.quarkus.utilities.JavaBinFinder;
@@ -180,6 +186,9 @@ public class DevMojo extends AbstractMojo {
     @Parameter(defaultValue = "${jvm.args}")
     private String jvmArgs;
 
+    @Parameter(defaultValue = "${quarkus.args}")
+    private String argsString;
+
     @Parameter(defaultValue = "${session}")
     private MavenSession session;
 
@@ -236,6 +245,8 @@ public class DevMojo extends AbstractMojo {
 
     @Component
     private BuildPluginManager pluginManager;
+
+    private Boolean debugPortOk;
 
     @Override
     public void execute() throws MojoFailureException, MojoExecutionException {
@@ -484,24 +495,27 @@ public class DevMojo extends AbstractMojo {
          */
         void prepare() throws Exception {
             if (debug == null) {
-                boolean useDebugMode = true;
                 // debug mode not specified
                 // make sure 5005 is not used, we don't want to just fail if something else is using it
-                try (Socket socket = new Socket(InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }), 5005)) {
-                    getLog().error("Port 5005 in use, not starting in debug mode");
-                    useDebugMode = false;
-                } catch (IOException e) {
+                // we don't check this on restarts, as the previous process is still running
+                if (debugPortOk == null) {
+                    try (Socket socket = new Socket(InetAddress.getByAddress(new byte[] { 127, 0, 0, 1 }), 5005)) {
+                        getLog().error("Port 5005 in use, not starting in debug mode");
+                        debugPortOk = false;
+                    } catch (IOException e) {
+                        debugPortOk = true;
+                    }
                 }
-                if (useDebugMode) {
+                if (debugPortOk) {
                     args.add("-Xdebug");
-                    args.add("-Xrunjdwp:transport=dt_socket,address=5005,server=y,suspend=" + suspend);
+                    args.add("-Xrunjdwp:transport=dt_socket,address=0.0.0.0:5005,server=y,suspend=" + suspend);
                 }
             } else if (debug.toLowerCase().equals("client")) {
                 args.add("-Xdebug");
                 args.add("-Xrunjdwp:transport=dt_socket,address=localhost:5005,server=n,suspend=" + suspend);
             } else if (debug.toLowerCase().equals("true")) {
                 args.add("-Xdebug");
-                args.add("-Xrunjdwp:transport=dt_socket,address=localhost:5005,server=y,suspend=" + suspend);
+                args.add("-Xrunjdwp:transport=dt_socket,address=0.0.0.0:5005,server=y,suspend=" + suspend);
             } else if (!debug.toLowerCase().equals("false")) {
                 try {
                     int port = Integer.parseInt(debug);
@@ -509,7 +523,7 @@ public class DevMojo extends AbstractMojo {
                         throw new MojoFailureException("The specified debug port must be greater than 0");
                     }
                     args.add("-Xdebug");
-                    args.add("-Xrunjdwp:transport=dt_socket,address=" + port + ",server=y,suspend=" + suspend);
+                    args.add("-Xrunjdwp:transport=dt_socket,address=0.0.0.0:" + port + ",server=y,suspend=" + suspend);
                 } catch (NumberFormatException e) {
                     throw new MojoFailureException(
                             "Invalid value for debug parameter: " + debug + " must be true|false|client|{port}");
@@ -555,6 +569,11 @@ public class DevMojo extends AbstractMojo {
                     for (Xpp3Dom argConfiguration : compilerPluginArgsConfiguration.getChildren()) {
                         compilerPluginArgs.add(argConfiguration.getValue());
                     }
+                    // compilerArgs can also take a value without using arg
+                    if (compilerPluginArgsConfiguration.getValue() != null
+                            && !compilerPluginArgsConfiguration.getValue().isEmpty()) {
+                        compilerPluginArgs.add(compilerPluginArgsConfiguration.getValue().trim());
+                    }
                     devModeContext.setCompilerOptions(compilerPluginArgs);
                     break;
                 }
@@ -568,15 +587,7 @@ public class DevMojo extends AbstractMojo {
                 pomFiles.add(localProject.getDir().resolve("pom.xml"));
             } else {
                 localProject = LocalProject.loadWorkspace(outputDirectory.toPath());
-                for (LocalProject project : localProject.getSelfWithLocalDeps()) {
-                    if (project.getClassesDir() != null &&
-                    //if this project also contains Quarkus extensions we do no want to include these in the discovery
-                    //a bit of an edge case, but if you try and include a sample project with your extension you will
-                    //run into problems without this
-                            (Files.exists(project.getClassesDir().resolve("META-INF/quarkus-extension.properties")) ||
-                                    Files.exists(project.getClassesDir().resolve("META-INF/quarkus-build-steps.list")))) {
-                        continue;
-                    }
+                for (LocalProject project : filterExtensionDependencies(localProject)) {
                     addProject(devModeContext, project);
                     pomFiles.add(project.getDir().resolve("pom.xml"));
                 }
@@ -633,15 +644,54 @@ public class DevMojo extends AbstractMojo {
             }
 
             outputDirectory.mkdirs();
+            // if the --enable-preview flag was set, then we need to enable it when launching dev mode as well
+            if (devModeContext.isEnablePreview()) {
+                args.add(DevModeContext.ENABLE_PREVIEW_FLAG);
+            }
+
+            propagateUserProperties();
 
             args.add("-jar");
             args.add(tempFile.getAbsolutePath());
+            if (argsString != null) {
+                args.addAll(Arrays.asList(CommandLineUtils.translateCommandline(argsString)));
+            }
+        }
 
+        private void propagateUserProperties() {
+            final String mavenCmdLine = BootstrapMavenOptions.getMavenCmdLine();
+            if (mavenCmdLine == null || mavenCmdLine.isEmpty()) {
+                return;
+            }
+            int i = mavenCmdLine.indexOf("-D");
+            if (i < 0) {
+                return;
+            }
+            final StringBuilder buf = new StringBuilder();
+            buf.append("-D");
+            i += 2;
+            while (i < mavenCmdLine.length()) {
+                final char ch = mavenCmdLine.charAt(i++);
+                if (!Character.isWhitespace(ch)) {
+                    buf.append(ch);
+                } else if (buf.length() > 2) {
+                    args.add(buf.toString());
+                    buf.setLength(2);
+                    i = mavenCmdLine.indexOf("-D", i);
+                    if (i < 0) {
+                        break;
+                    }
+                    i += 2;
+                }
+            }
+            if (buf.length() > 2) {
+                args.add(buf.toString());
+            }
         }
 
         private void addQuarkusDevModeDeps(StringBuilder classPathManifest, final DevModeContext devModeContext)
                 throws MojoExecutionException, DependencyResolutionException {
-            final String pomPropsPath = "META-INF/maven/io.quarkus/quarkus-development-mode/pom.properties";
+            final String pomPropsPath = "META-INF/maven/io.quarkus/quarkus-core-deployment/pom.properties";
             final InputStream devModePomPropsIs = DevModeMain.class.getClassLoader().getResourceAsStream(pomPropsPath);
             if (devModePomPropsIs == null) {
                 throw new MojoExecutionException("Failed to locate " + pomPropsPath + " on the classpath");
@@ -674,8 +724,11 @@ public class DevMojo extends AbstractMojo {
                                             .setRepositories(repos)));
 
             for (ArtifactResult appDep : cpRes.getArtifactResults()) {
-                File file = appDep.getArtifact().getFile();
-                addToClassPaths(classPathManifest, devModeContext, file);
+                //we only use the launcher for launching from the IDE, we need to exclude it
+                if (!(appDep.getArtifact().getGroupId().equals("io.quarkus")
+                        && appDep.getArtifact().getArtifactId().equals("quarkus-ide-launcher"))) {
+                    addToClassPaths(classPathManifest, devModeContext, appDep.getArtifact().getFile());
+                }
             }
         }
 
@@ -752,5 +805,54 @@ public class DevMojo extends AbstractMojo {
             process.waitFor();
         }
 
+    }
+
+    private List<LocalProject> filterExtensionDependencies(LocalProject localProject) {
+        List<LocalProject> ret = new ArrayList<>();
+        Queue<LocalProject> toRemove = new ArrayDeque<>();
+        Set<AppArtifactKey> extensionsAndDeps = new HashSet<>();
+        Set<AppArtifactKey> inProject = new HashSet<>();
+
+        for (LocalProject project : localProject.getSelfWithLocalDeps()) {
+            inProject.add(project.getKey());
+            if (project.getClassesDir() != null &&
+            //if this project also contains Quarkus extensions we do no want to include these in the discovery
+            //a bit of an edge case, but if you try and include a sample project with your extension you will
+            //run into problems without this
+                    (Files.exists(project.getClassesDir().resolve("META-INF/quarkus-extension.properties")) ||
+                            Files.exists(project.getClassesDir().resolve("META-INF/quarkus-build-steps.list")))) {
+                toRemove.add(project);
+                extensionsAndDeps.add(project.getKey());
+            } else {
+                ret.add(project);
+            }
+        }
+        if (toRemove.isEmpty()) {
+            return ret;
+        }
+        //we also remove transitive deps of the extensions
+        //this is common in projects that provide a library, and a quarkus extension for that library
+        //all in the same project
+        while (!toRemove.isEmpty()) {
+            LocalProject dep = toRemove.poll();
+            //we don't need to resolve deps properly, this is all in the same project
+            //so we have all the info we need locally
+            for (Dependency i : dep.getRawModel().getDependencies()) {
+                AppArtifactKey key = new AppArtifactKey(i.getGroupId(), i.getArtifactId());
+                if (inProject.contains(key) && !extensionsAndDeps.contains(key)) {
+                    extensionsAndDeps.add(key);
+                    toRemove.add(localProject.getWorkspace().getProject(key));
+                }
+            }
+        }
+        Iterator<LocalProject> iterator = ret.iterator();
+        while (iterator.hasNext()) {
+            LocalProject obj = iterator.next();
+            if (extensionsAndDeps.contains(obj.getKey())) {
+                getLog().warn("Local Quarkus extension dependency " + obj.getKey() + " will not be hot-reloadable");
+                iterator.remove();
+            }
+        }
+        return ret;
     }
 }

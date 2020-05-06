@@ -26,6 +26,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -70,6 +71,8 @@ public class SubclassGenerator extends AbstractGenerator {
             "bindings", Set.class);
 
     private final Predicate<DotName> applicationClassPredicate;
+    private final ReflectionRegistration reflectionRegistration;
+    private final Set<String> existingClasses;
 
     static String generatedName(DotName providerTypeName, String baseName) {
         return DotNames.packageName(providerTypeName).replace('.', '/') + "/" + baseName + SUBCLASS_SUFFIX;
@@ -77,31 +80,36 @@ public class SubclassGenerator extends AbstractGenerator {
 
     private final AnnotationLiteralProcessor annotationLiterals;
 
-    /**
-     *
-     * @param annotationLiterals
-     * @param applicationClassPredicate
-     */
-    public SubclassGenerator(AnnotationLiteralProcessor annotationLiterals, Predicate<DotName> applicationClassPredicate) {
+    public SubclassGenerator(AnnotationLiteralProcessor annotationLiterals, Predicate<DotName> applicationClassPredicate,
+            boolean generateSources, ReflectionRegistration reflectionRegistration,
+            Set<String> existingClasses) {
+        super(generateSources);
         this.applicationClassPredicate = applicationClassPredicate;
         this.annotationLiterals = annotationLiterals;
+        this.reflectionRegistration = reflectionRegistration;
+        this.existingClasses = existingClasses;
     }
 
     /**
      *
      * @param bean
      * @param beanClassName Fully qualified class name
+     * @param existingClasses
      * @return a java file
      */
-    Collection<Resource> generate(BeanInfo bean, String beanClassName, ReflectionRegistration reflectionRegistration) {
+    Collection<Resource> generate(BeanInfo bean, String beanClassName) {
 
-        ResourceClassOutput classOutput = new ResourceClassOutput(applicationClassPredicate.test(bean.getBeanClass()));
+        ResourceClassOutput classOutput = new ResourceClassOutput(applicationClassPredicate.test(bean.getBeanClass()),
+                generateSources);
 
         Type providerType = bean.getProviderType();
         ClassInfo providerClass = getClassByName(bean.getDeployment().getIndex(), providerType.name());
         String providerTypeName = providerClass.name().toString();
         String baseName = getBaseName(bean, beanClassName);
         String generatedName = generatedName(providerType.name(), baseName);
+        if (existingClasses.contains(generatedName)) {
+            return Collections.emptyList();
+        }
 
         // Foo_Subclass extends Foo implements Subclass
         ClassCreator subclass = ClassCreator.builder().classOutput(classOutput).className(generatedName)

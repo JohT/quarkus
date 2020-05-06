@@ -15,6 +15,10 @@ import io.quarkus.panache.common.Sort;
 @Consumes(MediaType.APPLICATION_JSON)
 public class PersonRepositoryResource {
 
+    // fake unused injection point to force ArC to not remove this otherwise I can't mock it in the tests
+    @Inject
+    MockablePersonRepository mockablePersonRepository;
+
     @Inject
     PersonRepository personRepository;
 
@@ -80,5 +84,12 @@ public class PersonRepositoryResource {
     @DELETE
     public void deleteAll() {
         personRepository.deleteAll();
+    }
+
+    @POST
+    @Path("/rename")
+    public Response rename(@QueryParam("previousName") String previousName, @QueryParam("newName") String newName) {
+        personRepository.update("lastname", newName).where("lastname", previousName);
+        return Response.ok().build();
     }
 }

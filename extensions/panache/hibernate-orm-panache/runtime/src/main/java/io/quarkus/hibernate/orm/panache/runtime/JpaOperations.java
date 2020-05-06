@@ -115,12 +115,19 @@ public class JpaOperations {
     }
 
     static String createFindQuery(Class<?> entityClass, String query, int paramCount) {
-        if (query == null)
+        if (query == null) {
             return "FROM " + getEntityName(entityClass);
+        }
 
         String trimmed = query.trim();
-        if (trimmed.isEmpty())
+        if (trimmed.isEmpty()) {
             return "FROM " + getEntityName(entityClass);
+        }
+
+        if (isNamedQuery(query)) {
+            // we return named query as is
+            return query;
+        }
 
         String trimmedLc = trimmed.toLowerCase();
         if (trimmedLc.startsWith("from ") || trimmedLc.startsWith("select ")) {
@@ -133,6 +140,13 @@ public class JpaOperations {
             query += " = ?1";
         }
         return "FROM " + getEntityName(entityClass) + " WHERE " + query;
+    }
+
+    static boolean isNamedQuery(String query) {
+        if (query == null || query.isEmpty()) {
+            return false;
+        }
+        return query.charAt(0) == '#';
     }
 
     private static String createCountQuery(Class<?> entityClass, String query, int paramCount) {
@@ -206,6 +220,9 @@ public class JpaOperations {
     }
 
     public static String toOrderBy(Sort sort) {
+        if (sort == null) {
+            return null;
+        }
         if (sort.getColumns().size() == 0) {
             return "";
         }
@@ -249,9 +266,12 @@ public class JpaOperations {
         String findQuery = createFindQuery(entityClass, query, paramCount(params));
         EntityManager em = getEntityManager();
         // FIXME: check for duplicate ORDER BY clause?
-        Query jpaQuery = em.createQuery(sort != null ? findQuery + toOrderBy(sort) : findQuery);
-        bindParameters(jpaQuery, params);
-        return new PanacheQueryImpl(em, jpaQuery, findQuery, params);
+        if (isNamedQuery(query)) {
+            String namedQuery = query.substring(1);
+            NamedQueryUtil.checkNamedQuery(entityClass, namedQuery);
+            return new PanacheQueryImpl(em, query, toOrderBy(sort), params);
+        }
+        return new PanacheQueryImpl(em, findQuery, toOrderBy(sort), params);
     }
 
     public static PanacheQuery<?> find(Class<?> entityClass, String query, Map<String, Object> params) {
@@ -263,9 +283,12 @@ public class JpaOperations {
         String findQuery = createFindQuery(entityClass, query, paramCount(params));
         EntityManager em = getEntityManager();
         // FIXME: check for duplicate ORDER BY clause?
-        Query jpaQuery = em.createQuery(sort != null ? findQuery + toOrderBy(sort) : findQuery);
-        bindParameters(jpaQuery, params);
-        return new PanacheQueryImpl(em, jpaQuery, findQuery, params);
+        if (isNamedQuery(query)) {
+            String namedQuery = query.substring(1);
+            NamedQueryUtil.checkNamedQuery(entityClass, namedQuery);
+            return new PanacheQueryImpl(em, query, toOrderBy(sort), params);
+        }
+        return new PanacheQueryImpl(em, findQuery, toOrderBy(sort), params);
     }
 
     public static PanacheQuery<?> find(Class<?> entityClass, String query, Parameters params) {
@@ -328,7 +351,7 @@ public class JpaOperations {
     public static PanacheQuery<?> findAll(Class<?> entityClass) {
         String query = "FROM " + getEntityName(entityClass);
         EntityManager em = getEntityManager();
-        return new PanacheQueryImpl(em, em.createQuery(query), query, null);
+        return new PanacheQueryImpl(em, query, null, null);
     }
 
     @SuppressWarnings("rawtypes")
@@ -336,7 +359,7 @@ public class JpaOperations {
         String query = "FROM " + getEntityName(entityClass);
         String sortedQuery = query + toOrderBy(sort);
         EntityManager em = getEntityManager();
-        return new PanacheQueryImpl(em, em.createQuery(sortedQuery), query, null);
+        return new PanacheQueryImpl(em, query, toOrderBy(sort), null);
     }
 
     public static List<?> listAll(Class<?> entityClass) {
@@ -391,6 +414,17 @@ public class JpaOperations {
 
     public static long deleteAll(Class<?> entityClass) {
         return (long) getEntityManager().createQuery("DELETE FROM " + getEntityName(entityClass)).executeUpdate();
+    }
+
+    public static boolean deleteById(Class<?> entityClass, Object id) {
+        // Impl note : we load the entity then delete it because it's the only implementation generic enough for any model,
+        // and correct in all cases (composite key, graph of entities, ...). HQL cannot be directly used for these reasons.
+        Object entity = findById(entityClass, id);
+        if (entity == null) {
+            return false;
+        }
+        getEntityManager().remove(entity);
+        return true;
     }
 
     public static long delete(Class<?> entityClass, String query, Object... params) {

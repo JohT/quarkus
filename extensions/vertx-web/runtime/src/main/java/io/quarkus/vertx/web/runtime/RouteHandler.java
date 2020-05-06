@@ -1,6 +1,8 @@
 package io.quarkus.vertx.web.runtime;
 
-import io.quarkus.arc.runtime.BeanInvoker;
+import io.quarkus.arc.Arc;
+import io.quarkus.arc.ManagedContext;
+import io.quarkus.vertx.http.runtime.security.QuarkusHttpUser;
 import io.quarkus.vertx.web.Route;
 import io.vertx.core.Handler;
 import io.vertx.ext.web.RoutingContext;
@@ -10,11 +12,36 @@ import io.vertx.ext.web.RoutingContext;
  * 
  * @see Route
  */
-public interface RouteHandler extends Handler<RoutingContext>, BeanInvoker<RoutingContext> {
+public interface RouteHandler extends Handler<RoutingContext> {
+
+    /**
+     * Invokes the route method.
+     * 
+     * @param context
+     */
+    void invoke(RoutingContext context);
 
     @Override
     default void handle(RoutingContext context) {
-        BeanInvoker.super.invoke(context);
+        QuarkusHttpUser user = (QuarkusHttpUser) context.user();
+        ManagedContext requestContext = Arc.container().requestContext();
+        //todo: how should we handle non-proactive authentication here?
+        if (requestContext.isActive()) {
+            if (user != null) {
+                Arc.container().beanManager().fireEvent(user.getSecurityIdentity());
+            }
+            invoke(context);
+        } else {
+            try {
+                requestContext.activate();
+                if (user != null) {
+                    Arc.container().beanManager().fireEvent(user.getSecurityIdentity());
+                }
+                invoke(context);
+            } finally {
+                requestContext.terminate();
+            }
+        }
     }
 
 }

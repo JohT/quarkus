@@ -15,6 +15,8 @@ import static org.twdata.maven.mojoexecutor.MojoExecutor.version;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -36,6 +38,7 @@ import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.project.DefaultProjectBuildingRequest;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuilder;
+import org.apache.maven.settings.Proxy;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.repository.RemoteRepository;
@@ -46,6 +49,7 @@ import io.quarkus.bootstrap.resolver.maven.MavenArtifactResolver;
 import io.quarkus.cli.commands.AddExtensions;
 import io.quarkus.cli.commands.CreateProject;
 import io.quarkus.cli.commands.writer.FileProjectWriter;
+import io.quarkus.cli.commands.writer.ProjectWriter;
 import io.quarkus.generators.BuildTool;
 import io.quarkus.generators.SourceType;
 import io.quarkus.maven.components.MavenVersionEnforcer;
@@ -212,14 +216,14 @@ public class CreateProjectMojo extends AbstractMojo {
             success = createProject.execute().isSuccess();
 
             File createdDependenciesBuildFile = new File(projectRoot, buildToolEnum.getDependenciesFile());
-            File buildFile = new File(createdDependenciesBuildFile.getAbsolutePath());
             if (success) {
-                success = new AddExtensions(projectWriter, platform).extensions(extensions).execute().isSuccess();
+                success = new AddExtensions(projectWriter, buildToolEnum, platform).extensions(extensions).execute()
+                        .isSuccess();
             }
             if (BuildTool.MAVEN.equals(buildToolEnum)) {
                 createMavenWrapper(createdDependenciesBuildFile, ToolsUtils.readQuarkusProperties(platform));
             } else if (BuildTool.GRADLE.equals(buildToolEnum)) {
-                createGradleWrapper(buildFile.getParentFile(), ToolsUtils.readQuarkusProperties(platform));
+                createGradleWrapper(platform, projectWriter);
             }
         } catch (Exception e) {
             throw new MojoExecutionException("Failed to generate Quarkus project", e);
@@ -232,27 +236,27 @@ public class CreateProjectMojo extends AbstractMojo {
         }
     }
 
-    private void createGradleWrapper(File projectDirectory, Properties props) {
+    private void createGradleWrapper(QuarkusPlatformDescriptor platform,
+            ProjectWriter writer) {
         try {
-            String gradleName = IS_WINDOWS ? "gradle.bat" : "gradle";
-            ProcessBuilder pb = new ProcessBuilder(gradleName, "wrapper",
-                    "--gradle-version=" + ToolsUtils.getGradleWrapperVersion(props)).directory(projectDirectory)
-                            .inheritIO();
-            Process x = pb.start();
+            writer.mkdirs("gradle/wrapper");
 
-            x.waitFor();
-
-            if (x.exitValue() != 0) {
-                getLog().warn("Unable to install the Gradle wrapper (./gradlew) in project. See log for details.");
+            for (String filename : CreateUtils.GRADLE_WRAPPER_FILES) {
+                byte[] fileContent = platform.loadResource(Paths.get(CreateUtils.GRADLE_WRAPPER_PATH, filename).toString(),
+                        is -> {
+                            byte[] buffer = new byte[is.available()];
+                            is.read(buffer);
+                            return buffer;
+                        });
+                final Path destination = writer.getProjectFolder().toPath().resolve(filename);
+                Files.write(destination, fileContent);
             }
 
-        } catch (InterruptedException | IOException e) {
-            // no reason to fail if the wrapper could not be created
-            getLog().error(
-                    "Unable to install the Gradle wrapper (./gradlew) in the project. You need to have gradle installed to generate the wrapper files.",
-                    e);
+            new File(writer.getProjectFolder(), "gradlew").setExecutable(true);
+            new File(writer.getProjectFolder(), "gradlew.bat").setExecutable(true);
+        } catch (IOException e) {
+            getLog().error("Unable to copy Gradle wrapper from platform descriptor", e);
         }
-
     }
 
     private void createMavenWrapper(File createdPomFile, Properties props) {
@@ -269,6 +273,8 @@ public class CreateProjectMojo extends AbstractMojo {
                     newExecutionRequest, session.getResult());
             newSession.setCurrentProject(newProject);
 
+            setProxySystemPropertiesFromSession();
+
             executeMojo(
                     plugin(
                             groupId("io.takari"),
@@ -284,6 +290,27 @@ public class CreateProjectMojo extends AbstractMojo {
         } catch (Exception e) {
             // no reason to fail if the wrapper could not be created
             getLog().error("Unable to install the Maven wrapper (./mvnw) in the project", e);
+        }
+    }
+
+    private void setProxySystemPropertiesFromSession() {
+        List<Proxy> proxiesFromSession = session.getRequest().getProxies();
+        // - takari maven uses https to download the maven wrapper
+        // - don't do anything if proxy system property is already set
+        if (!proxiesFromSession.isEmpty() && System.getProperty("https.proxyHost") == null) {
+
+            // use the first active proxy for setting the system properties
+            proxiesFromSession.stream()
+                    .filter(Proxy::isActive)
+                    .findFirst()
+                    .ifPresent(proxy -> {
+                        // note: a http proxy _is_ usable as https.proxyHost
+                        System.setProperty("https.proxyHost", proxy.getHost());
+                        System.setProperty("https.proxyPort", String.valueOf(proxy.getPort()));
+                        if (proxy.getNonProxyHosts() != null) {
+                            System.setProperty("http.nonProxyHosts", proxy.getNonProxyHosts());
+                        }
+                    });
         }
     }
 

@@ -30,7 +30,6 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import javax.enterprise.event.Reception;
-import javax.enterprise.inject.Model;
 import javax.enterprise.inject.spi.DefinitionException;
 import javax.enterprise.inject.spi.DeploymentException;
 import org.jboss.jandex.AnnotationInstance;
@@ -49,13 +48,16 @@ import org.jboss.logging.Logger.Level;
 public class BeanDeployment {
 
     private static final Logger LOGGER = Logger.getLogger(BeanDeployment.class);
-    public static final EnumSet<Type.Kind> CLASS_TYPES = EnumSet.of(Type.Kind.CLASS, Type.Kind.PARAMETERIZED_TYPE);
+
+    static final EnumSet<Type.Kind> CLASS_TYPES = EnumSet.of(Type.Kind.CLASS, Type.Kind.PARAMETERIZED_TYPE);
 
     private final BuildContextImpl buildContext;
 
     private final IndexView index;
 
     private final Map<DotName, ClassInfo> qualifiers;
+
+    private final Map<DotName, ClassInfo> repeatingQualifierAnnotations;
 
     private final Map<DotName, ClassInfo> interceptorBindings;
 
@@ -92,14 +94,16 @@ public class BeanDeployment {
     private final Map<ScopeInfo, Function<MethodCreator, ResultHandle>> customContexts;
 
     private final Collection<BeanDefiningAnnotation> beanDefiningAnnotations;
-    private final boolean removeFinalForProxyableMethods;
+    final boolean transformUnproxyableClasses;
     private final boolean jtaCapabilities;
+
+    private final AlternativePriorities alternativePriorities;
 
     BeanDeployment(IndexView index, Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations,
             List<AnnotationsTransformer> annotationTransformers) {
         this(index, additionalBeanDefiningAnnotations, annotationTransformers, Collections.emptyList(), Collections.emptyList(),
                 Collections.emptyList(),
-                null, false, null, Collections.emptyMap(), Collections.emptyList(), false, false);
+                null, false, null, Collections.emptyMap(), Collections.emptyList(), false, false, null);
     }
 
     BeanDeployment(IndexView index, Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations,
@@ -109,8 +113,10 @@ public class BeanDeployment {
             Collection<DotName> resourceAnnotations,
             BuildContextImpl buildContext, boolean removeUnusedBeans, List<Predicate<BeanInfo>> unusedExclusions,
             Map<DotName, Collection<AnnotationInstance>> additionalStereotypes,
-            List<InterceptorBindingRegistrar> bindingRegistrars, boolean removeFinalForProxyableMethods,
-            boolean jtaCapabilities) {
+            List<InterceptorBindingRegistrar> bindingRegistrars,
+            boolean transformUnproxyableClasses,
+            boolean jtaCapabilities,
+            AlternativePriorities alternativePriorities) {
         this.buildContext = buildContext;
         Set<BeanDefiningAnnotation> beanDefiningAnnotations = new HashSet<>();
         if (additionalBeanDefiningAnnotations != null) {
@@ -132,6 +138,7 @@ public class BeanDeployment {
         this.customContexts = new ConcurrentHashMap<>();
 
         this.qualifiers = findQualifiers(index);
+        this.repeatingQualifierAnnotations = findContainerAnnotations(qualifiers, index);
         buildContextPut(Key.QUALIFIERS.asString(), Collections.unmodifiableMap(qualifiers));
 
         this.interceptorBindings = findInterceptorBindings(index);
@@ -164,8 +171,9 @@ public class BeanDeployment {
 
         this.beanResolver = new BeanResolver(this);
         this.interceptorResolver = new InterceptorResolver(this);
-        this.removeFinalForProxyableMethods = removeFinalForProxyableMethods;
+        this.transformUnproxyableClasses = transformUnproxyableClasses;
         this.jtaCapabilities = jtaCapabilities;
+        this.alternativePriorities = alternativePriorities;
     }
 
     ContextRegistrar.RegistrationContext registerCustomContexts(List<ContextRegistrar> contextRegistrars) {
@@ -221,13 +229,13 @@ public class BeanDeployment {
         // Collect dependency resolution errors
         List<Throwable> errors = new ArrayList<>();
         for (BeanInfo bean : beans) {
-            bean.init(errors, bytecodeTransformerConsumer, removeFinalForProxyableMethods);
+            bean.init(errors, bytecodeTransformerConsumer, transformUnproxyableClasses);
         }
         for (ObserverInfo observer : observers) {
             observer.init(errors);
         }
         for (InterceptorInfo interceptor : interceptors) {
-            interceptor.init(errors, bytecodeTransformerConsumer, removeFinalForProxyableMethods);
+            interceptor.init(errors, bytecodeTransformerConsumer, transformUnproxyableClasses);
         }
         processErrors(errors);
 
@@ -313,14 +321,17 @@ public class BeanDeployment {
         LOGGER.debugf("Bean deployment initialized in %s ms", System.currentTimeMillis() - start);
     }
 
-    ValidationContext validate(List<BeanDeploymentValidator> validators) {
+    ValidationContext validate(List<BeanDeploymentValidator> validators,
+            Consumer<BytecodeTransformer> bytecodeTransformerConsumer) {
         // Validate the bean deployment
         List<Throwable> errors = new ArrayList<>();
-        validateBeans(errors, validators);
+        // First, validate all beans internally
+        validateBeans(errors, validators, bytecodeTransformerConsumer);
         ValidationContextImpl validationContext = new ValidationContextImpl(buildContext);
         for (Throwable error : errors) {
             validationContext.addDeploymentProblem(error);
         }
+        // Next, execute all registered validators 
         for (BeanDeploymentValidator validator : validators) {
             validator.validate(validationContext);
         }
@@ -363,6 +374,30 @@ public class BeanDeployment {
         return qualifiers.get(name);
     }
 
+    /**
+     * Extracts qualifiers from given annotation instance.
+     * This returns a collection because in case of repeating qualifiers there can be multiple.
+     * For most instances this will be a singleton instance (if given annotatation is a qualifier) or an empty list for
+     * cases where the annotation is not a qualifier.
+     *
+     * @param annotation instance to be inspected
+     * @return a collection of qualifiers or an empty collection
+     */
+    Collection<AnnotationInstance> extractQualifiers(AnnotationInstance annotation) {
+        DotName annotationName = annotation.name();
+        if (qualifiers.get(annotationName) != null) {
+            return Collections.singleton(annotation);
+        } else {
+            if (repeatingQualifierAnnotations.get(annotationName) != null) {
+                // container annotation, we need to extract actual qualifiers
+                return new ArrayList<>(Arrays.asList(annotation.value().asNestedArray()));
+            } else {
+                // neither qualifier, nor container annotation, return empty collection
+                return Collections.emptyList();
+            }
+        }
+    }
+
     ClassInfo getInterceptorBinding(DotName name) {
         return interceptorBindings.get(name);
     }
@@ -403,6 +438,16 @@ public class BeanDeployment {
         return getScope(scopeAnnotationName, customContexts);
     }
 
+    /**
+     * 
+     * @param target
+     * @param stereotypes
+     * @return the computed priority or {@code null}
+     */
+    Integer computeAlternativePriority(AnnotationTarget target, List<StereotypeInfo> stereotypes) {
+        return alternativePriorities != null ? alternativePriorities.compute(target, stereotypes) : null;
+    }
+
     private void buildContextPut(String key, Object value) {
         if (buildContext != null) {
             buildContext.putInternal(key, value);
@@ -415,6 +460,18 @@ public class BeanDeployment {
             qualifiers.put(qualifier.target().asClass().name(), qualifier.target().asClass());
         }
         return qualifiers;
+    }
+
+    private static Map<DotName, ClassInfo> findContainerAnnotations(Map<DotName, ClassInfo> qualifiers, IndexView index) {
+        Map<DotName, ClassInfo> containerAnnotations = new HashMap<>();
+        for (ClassInfo qualifier : qualifiers.values()) {
+            AnnotationInstance instance = qualifier.classAnnotation(DotNames.REPEATABLE);
+            if (instance != null) {
+                DotName annotationName = instance.value().asClass().name();
+                containerAnnotations.put(annotationName, getClassByName(index, annotationName));
+            }
+        }
+        return containerAnnotations;
     }
 
     private static Map<DotName, ClassInfo> findInterceptorBindings(IndexView index) {
@@ -741,9 +798,11 @@ public class BeanDeployment {
         Map<ClassInfo, BeanInfo> beanClassToBean = new HashMap<>();
         for (ClassInfo beanClass : beanClasses) {
             BeanInfo classBean = Beans.createClassBean(beanClass, this, injectionPointTransformer);
-            beans.add(classBean);
-            beanClassToBean.put(beanClass, classBean);
-            injectionPoints.addAll(classBean.getAllInjectionPoints());
+            if (classBean != null) {
+                beans.add(classBean);
+                beanClassToBean.put(beanClass, classBean);
+                injectionPoints.addAll(classBean.getAllInjectionPoints());
+            }
         }
 
         List<DisposerInfo> disposers = new ArrayList<>();
@@ -762,16 +821,21 @@ public class BeanDeployment {
             if (declaringBean != null) {
                 BeanInfo producerMethodBean = Beans.createProducerMethod(producerMethod, declaringBean, this,
                         findDisposer(declaringBean, producerMethod, disposers), injectionPointTransformer);
-                beans.add(producerMethodBean);
-                injectionPoints.addAll(producerMethodBean.getAllInjectionPoints());
+                if (producerMethodBean != null) {
+                    beans.add(producerMethodBean);
+                    injectionPoints.addAll(producerMethodBean.getAllInjectionPoints());
+                }
             }
         }
 
         for (FieldInfo producerField : producerFields) {
             BeanInfo declaringBean = beanClassToBean.get(producerField.declaringClass());
             if (declaringBean != null) {
-                beans.add(Beans.createProducerField(producerField, declaringBean, this,
-                        findDisposer(declaringBean, producerField, disposers)));
+                BeanInfo producerFieldBean = Beans.createProducerField(producerField, declaringBean, this,
+                        findDisposer(declaringBean, producerField, disposers));
+                if (producerFieldBean != null) {
+                    beans.add(producerFieldBean);
+                }
             }
         }
 
@@ -819,25 +883,23 @@ public class BeanDeployment {
     private DisposerInfo findDisposer(BeanInfo declaringBean, AnnotationTarget annotationTarget, List<DisposerInfo> disposers) {
         List<DisposerInfo> found = new ArrayList<>();
         Type beanType;
-        Set<AnnotationInstance> qualifiers;
+        Set<AnnotationInstance> qualifiers = new HashSet<>();
+        List<AnnotationInstance> allAnnotations;
         if (Kind.FIELD.equals(annotationTarget.kind())) {
+            allAnnotations = annotationTarget.asField().annotations();
             beanType = annotationTarget.asField().type();
-            qualifiers = annotationTarget.asField().annotations().stream().filter(a -> getQualifier(a.name()) != null)
-                    .collect(Collectors.toSet());
         } else if (Kind.METHOD.equals(annotationTarget.kind())) {
+            allAnnotations = annotationTarget.asMethod().annotations();
             beanType = annotationTarget.asMethod().returnType();
-            qualifiers = annotationTarget.asMethod().annotations().stream()
-                    .filter(a -> Kind.METHOD.equals(a.target().kind()) && getQualifier(a.name()) != null)
-                    .collect(Collectors.toSet());
         } else {
             throw new RuntimeException("Unsupported annotation target: " + annotationTarget);
         }
+        allAnnotations.forEach(a -> extractQualifiers(a).forEach(qualifiers::add));
         for (DisposerInfo disposer : disposers) {
             if (disposer.getDeclaringBean().equals(declaringBean)) {
                 boolean hasQualifier = true;
-                for (AnnotationInstance qualifier : qualifiers) {
-                    if (!Beans.hasQualifier(getQualifier(qualifier.name()), qualifier,
-                            disposer.getDisposedParameterQualifiers())) {
+                for (AnnotationInstance disposerQualifier : disposer.getDisposedParameterQualifiers()) {
+                    if (!Beans.hasQualifier(getQualifier(disposerQualifier.name()), disposerQualifier, qualifiers)) {
                         hasQualifier = false;
                     }
                 }
@@ -865,7 +927,6 @@ public class BeanDeployment {
             }
         }
         beanDefiningAnnotations.addAll(stereotypes);
-        beanDefiningAnnotations.add(DotNames.create(Model.class));
         return beanDefiningAnnotations;
     }
 
@@ -906,6 +967,8 @@ public class BeanDeployment {
                 Throwable error = errors.get(0);
                 if (error instanceof DeploymentException) {
                     throw (DeploymentException) error;
+                } else if (error instanceof DefinitionException) {
+                    throw (DefinitionException) error;
                 } else {
                     throw new DeploymentException(errors.get(0));
                 }
@@ -947,7 +1010,9 @@ public class BeanDeployment {
         return interceptors;
     }
 
-    private void validateBeans(List<Throwable> errors, List<BeanDeploymentValidator> validators) {
+    private void validateBeans(List<Throwable> errors, List<BeanDeploymentValidator> validators,
+            Consumer<BytecodeTransformer> bytecodeTransformerConsumer) {
+
         Map<String, List<BeanInfo>> namedBeans = new HashMap<>();
 
         for (BeanInfo bean : beans) {
@@ -959,7 +1024,7 @@ public class BeanDeployment {
                 }
                 named.add(bean);
             }
-            bean.validate(errors, validators);
+            bean.validate(errors, validators, bytecodeTransformerConsumer);
         }
 
         if (!namedBeans.isEmpty()) {

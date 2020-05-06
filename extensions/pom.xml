@@ -51,6 +51,9 @@
         <module>resteasy-mutiny</module>
         <module>resteasy-qute</module>
         <module>rest-client</module>
+        <module>rest-client-jackson</module>
+        <module>rest-client-jsonb</module>
+        <module>rest-client-jaxb</module>
         <module>smallrye-openapi-common</module>
         <module>smallrye-openapi</module>
         <module>swagger-ui</module>
@@ -106,11 +109,13 @@
         <module>elytron-security-common</module>
         <module>elytron-security</module>
         <module>elytron-security-jdbc</module>
+        <module>elytron-security-ldap</module>
         <module>elytron-security-properties-file</module>
         <module>elytron-security-oauth2</module>
         <module>smallrye-jwt</module>
         <module>oidc</module>
         <module>keycloak-authorization</module>
+        <module>keycloak-admin-client</module>
 
         <!-- Infinispan -->
         <module>infinispan-client</module>
@@ -125,7 +130,14 @@
         <module>amazon-lambda-xray</module>
         <module>amazon-lambda-http</module>
         <module>amazon-dynamodb</module>
+        <module>amazon-alexa</module>
         <module>azure-functions-http</module>
+
+        <!-- New Frameworks -->
+        <module>funqy/funqy-server-common</module>
+        <module>funqy/funqy-http</module>
+        <module>funqy/funqy-knative</module>
+        <module>funqy/funqy-amazon-lambda</module>
 
         <!-- Additional languages -->
         <module>kotlin</module>
@@ -135,15 +147,16 @@
         <module>container-image</module>
         <module>kubernetes</module>
         <module>kubernetes-client</module>
+        <module>kubernetes-config</module>
 
         <!-- Database migrations -->
         <module>flyway</module>
         <module>liquibase</module>
 
         <!-- Business automation -->
-        <module>kogito</module>
         <module>optaplanner</module>
         <module>optaplanner-jackson</module>
+        <module>optaplanner-jsonb</module>
 
         <!-- vault -->
         <module>vault</module>
@@ -153,7 +166,7 @@
         <module>logging-json</module>
         <module>logging-sentry</module>
         <module>logging-gelf</module>
-        
+
         <!-- Templating -->
         <module>qute</module>
     </modules>

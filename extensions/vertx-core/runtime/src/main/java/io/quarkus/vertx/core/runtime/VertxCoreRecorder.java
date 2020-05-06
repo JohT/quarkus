@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -19,7 +20,6 @@ import org.jboss.logging.Logger;
 import org.wildfly.common.cpu.ProcessorInfo;
 
 import io.netty.channel.EventLoopGroup;
-import io.quarkus.arc.runtime.BeanContainer;
 import io.quarkus.runtime.IOThreadDetector;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.ShutdownContext;
@@ -49,11 +49,9 @@ public class VertxCoreRecorder {
 
     static volatile VertxSupplier vertx;
 
-    public Supplier<Vertx> configureVertx(BeanContainer container, VertxConfiguration config,
-            LaunchMode launchMode, ShutdownContext shutdown) {
-        vertx = new VertxSupplier(config);
-        VertxCoreProducer producer = container.instance(VertxCoreProducer.class);
-        producer.initialize(vertx);
+    public Supplier<Vertx> configureVertx(VertxConfiguration config,
+            LaunchMode launchMode, ShutdownContext shutdown, List<Consumer<VertxOptions>> customizers) {
+        vertx = new VertxSupplier(config, customizers);
         if (launchMode != LaunchMode.DEVELOPMENT) {
             // we need this to be part of the last shutdown tasks because closing it early (basically before Arc)
             // could cause problem to beans that rely on Vert.x and contain shutdown tasks
@@ -76,16 +74,28 @@ public class VertxCoreRecorder {
         };
     }
 
+    static void shutdownDevMode() {
+        if (vertx != null) {
+            vertx.get().close();
+        }
+    }
+
     public static Supplier<Vertx> getVertx() {
         return vertx;
     }
 
-    public static Vertx initialize(VertxConfiguration conf) {
-        if (conf == null) {
-            return logVertxInitialization(Vertx.vertx());
+    public static Vertx initialize(VertxConfiguration conf, VertxOptionsCustomizer customizer) {
+
+        VertxOptions options = new VertxOptions();
+
+        if (conf != null) {
+            convertToVertxOptions(conf, options, true);
         }
 
-        VertxOptions options = convertToVertxOptions(conf, true);
+        // Allow extension customizers to do their thing
+        if (customizer != null) {
+            customizer.customize(options);
+        }
 
         Vertx vertx;
         if (options.getEventBusOptions().isClustered()) {
@@ -109,12 +119,11 @@ public class VertxCoreRecorder {
         return vertx;
     }
 
-    private static VertxOptions convertToVertxOptions(VertxConfiguration conf, boolean allowClustering) {
+    private static VertxOptions convertToVertxOptions(VertxConfiguration conf, VertxOptions options, boolean allowClustering) {
+
         if (!conf.useAsyncDNS) {
             System.setProperty(ResolverProvider.DISABLE_DNS_RESOLVER_PROP_NAME, "true");
         }
-
-        VertxOptions options = new VertxOptions();
 
         if (allowClustering) {
             // Order matters, as the cluster options modifies the event bus options.
@@ -321,18 +330,35 @@ public class VertxCoreRecorder {
 
     static class VertxSupplier implements Supplier<Vertx> {
         final VertxConfiguration config;
+        final VertxOptionsCustomizer customizer;
         Vertx v;
 
-        VertxSupplier(VertxConfiguration config) {
+        VertxSupplier(VertxConfiguration config, List<Consumer<VertxOptions>> customizers) {
             this.config = config;
+            this.customizer = new VertxOptionsCustomizer(customizers);
         }
 
         @Override
         public synchronized Vertx get() {
             if (v == null) {
-                v = initialize(config);
+                v = initialize(config, customizer);
             }
             return v;
+        }
+    }
+
+    static class VertxOptionsCustomizer {
+        final List<Consumer<VertxOptions>> customizers;
+
+        VertxOptionsCustomizer(List<Consumer<VertxOptions>> customizers) {
+            this.customizers = customizers;
+        }
+
+        VertxOptions customize(VertxOptions options) {
+            for (Consumer<VertxOptions> x : customizers) {
+                x.accept(options);
+            }
+            return options;
         }
     }
 }

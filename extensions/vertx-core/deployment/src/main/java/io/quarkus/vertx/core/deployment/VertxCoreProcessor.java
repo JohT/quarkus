@@ -1,12 +1,17 @@
 package io.quarkus.vertx.core.deployment;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
+
+import javax.inject.Singleton;
 
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 
-import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
-import io.quarkus.arc.deployment.BeanContainerBuildItem;
+import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
@@ -20,12 +25,12 @@ import io.quarkus.deployment.builditem.nativeimage.NativeImageConfigBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
 import io.quarkus.netty.deployment.EventLoopSupplierBuildItem;
-import io.quarkus.vertx.core.runtime.VertxCoreProducer;
 import io.quarkus.vertx.core.runtime.VertxCoreRecorder;
 import io.quarkus.vertx.core.runtime.VertxLogDelegateFactory;
 import io.quarkus.vertx.core.runtime.config.VertxConfiguration;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Vertx;
+import io.vertx.core.VertxOptions;
 import io.vertx.core.spi.resolver.ResolverProvider;
 
 class VertxCoreProcessor {
@@ -42,11 +47,6 @@ class VertxCoreProcessor {
                 .addNativeImageSystemProperty("vertx.logger-delegate-factory-class-name",
                         VertxLogDelegateFactory.class.getName())
                 .build();
-    }
-
-    @BuildStep
-    AdditionalBeanBuildItem registerBean() {
-        return AdditionalBeanBuildItem.unremovableOf(VertxCoreProducer.class);
     }
 
     @BuildStep
@@ -69,12 +69,26 @@ class VertxCoreProcessor {
 
     @BuildStep
     @Record(value = ExecutionTime.RUNTIME_INIT)
-    CoreVertxBuildItem build(VertxCoreRecorder recorder, BeanContainerBuildItem beanContainer,
+    CoreVertxBuildItem build(VertxCoreRecorder recorder,
             LaunchModeBuildItem launchMode, ShutdownContextBuildItem shutdown, VertxConfiguration config,
+            List<VertxOptionsConsumerBuildItem> vertxOptionsConsumers,
+            BuildProducer<SyntheticBeanBuildItem> syntheticBeanBuildItemBuildProducer,
             BuildProducer<ServiceStartBuildItem> serviceStartBuildItem) {
 
-        Supplier<Vertx> vertx = recorder.configureVertx(beanContainer.getValue(), config,
-                launchMode.getLaunchMode(), shutdown);
+        Collections.sort(vertxOptionsConsumers);
+        List<Consumer<VertxOptions>> consumers = new ArrayList<>(vertxOptionsConsumers.size());
+        for (VertxOptionsConsumerBuildItem x : vertxOptionsConsumers) {
+            consumers.add(x.getConsumer());
+        }
+
+        Supplier<Vertx> vertx = recorder.configureVertx(config,
+                launchMode.getLaunchMode(), shutdown, consumers);
+        syntheticBeanBuildItemBuildProducer.produce(SyntheticBeanBuildItem.configure(Vertx.class)
+                .types(Vertx.class)
+                .scope(Singleton.class)
+                .unremovable()
+                .setRuntimeInit()
+                .supplier(vertx).done());
 
         return new CoreVertxBuildItem(vertx);
     }

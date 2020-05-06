@@ -54,6 +54,21 @@ The root logger category is handled separately, and is configured via the follow
 |quarkus.log.level|INFO|The default minimum log level for every log category.
 |===
 
+=== Log levels
+
+There are several log levels you can use:
+
+[cols="<m,<5",options="header"]
+|===
+|Level|Description
+|FATAL|A critical service failure/complete inability to service requests of any kind
+|ERROR|A significant disruption in a request or the inability to service a request
+|WARN|A non-critical service error or problem that may not require immediate correction
+|INFO|Service lifecycle events or important related very-low-frequency information
+|DEBUG|Messages that convey extra information regarding lifecycle or non-request-bound events which may be helpful for debugging
+|TRACE|Messages that convey extra per-request debugging information that may be very high frequency
+|===
+
 [id="format-string"]
 == Format String
 
@@ -194,9 +209,44 @@ Applications and components may use any of the following APIs for logging, and t
 * https://www.slf4j.org/[SLF4J]
 * https://commons.apache.org/proper/commons-logging/[Apache Commons Logging]
 
-== Centralized log management
+== Centralized Log Management
 
 If you want to send your logs to a centralized tool like Graylog, Logstash or Fluentd, you can follow the link:centralized-log-management[Centralized log management guide].
+
+== How to Configure Logging for `@QuarkusTest`
+
+If you want to configure logging for your `@QuarkusTest`, don't forget to set up the `maven-surefire-plugin` accordingly.
+In particular, you need to set the appropriate `LogManager` using the `java.util.logging.manager` system property.  
+
+.Example Configuration
+[source, xml]
+----
+<build>
+  <plugins>
+    <plugin>
+      <artifactId>maven-surefire-plugin</artifactId>
+      <version>${surefire-plugin.version}</version>
+      <configuration>
+        <systemProperties>
+          <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager> <1>
+          <quarkus.log.level>DEBUG</quarkus.log.level>  <2>
+        </systemProperties>
+      </configuration>
+    </plugin>
+  </plugins>
+</build>
+----
+<1> Make sure the `org.jboss.logmanager.LogManager` is used.
+<2> Enable debug logging for all logging categories.
+
+If you are using Gradle, add this to your `build.gradle`:
+
+[source, groovy]
+----
+test {
+	systemProperty "java.util.logging.manager", "org.jboss.logmanager.LogManager"
+}
+----
 
 [[loggingConfigurationReference]]
 == Logging configuration reference

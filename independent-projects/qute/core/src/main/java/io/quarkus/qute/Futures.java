@@ -6,9 +6,12 @@ import java.util.Map.Entry;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
-class Futures {
+public final class Futures {
 
-    static <T> CompletableFuture<T> failure(Throwable t) {
+    private Futures() {
+    }
+
+    public static <T> CompletableFuture<T> failure(Throwable t) {
         CompletableFuture<T> failure = new CompletableFuture<>();
         failure.completeExceptionally(t);
         return failure;

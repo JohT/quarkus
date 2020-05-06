@@ -20,6 +20,8 @@ update_configs:
       - match:
           dependency_name: "org.flywaydb:flyway-core"
       - match:
+          dependency_name: "org.liquibase:liquibase-core"
+      - match:
           dependency_name: "org.freemarker:freemarker"
       - match:
           dependency_name: "org.eclipse.jgit:org.eclipse.jgit"
@@ -39,6 +41,8 @@ update_configs:
           dependency_name: "com.cronutils:cron-utils"
       - match:
           dependency_name: "org.eclipse:yasson"
+      - match:
+          dependency_name: "org.yaml:snakeyaml"
       # Quarkus
       - match:
           dependency_name: "io.quarkus.gizmo:gizmo"
@@ -62,8 +66,6 @@ update_configs:
           dependency_name: "mysql:mysql-connector-java"
       - match:
           dependency_name: "org.apache.derby:derbyclient"
-      - match:
-          dependency_name: "com.microsoft.sqlserver:mssql-jdbc"
       # Kafka
       - match:
           dependency_name: "org.apache.kafka:kafka-clients"
@@ -89,7 +91,25 @@ update_configs:
       - match:
           dependency_name: "io.smallrye:smallrye-jwt"
       - match:
+          dependency_name: "io.smallrye:smallrye-health"
+      - match:
+          dependency_name: "io.smallrye:smallrye-metrics"
+      - match:
+          dependency_name: "io.smallrye:smallrye-open-api"
+      - match:
+          dependency_name: "io.smallrye:smallrye-opentracing"
+      - match:
+          dependency_name: "io.smallrye:smallrye-fault-tolerance"
+      - match:
+          dependency_name: "io.smallrye:smallrye-context-propagation"
+      - match:
           dependency_name: "io.smallrye.config:smallrye-config"
+      - match:
+          dependency_name: "io.smallrye.reactive:mutiny"
+      - match:
+          dependency_name: "io.smallrye.reactive:smallrye-reactive-messaging"
+      - match:
+          dependency_name: "io.smallrye.reactive:smallrye-reactive-streams-operators"
       # Tika
       - match:
           dependency_name: "org.apache.tika:tika-parsers"
@@ -108,7 +128,7 @@ update_configs:
       - match:
           dependency_name: "org.testcontainers:testcontainers"
       - match:
-          dependency_name: "org.testcontainers:junit-jupiter"
+          dependency_name: "org.testcontainers:postgresql"
       - match:
           dependency_name: "org.mockito:mockito-core"
       - match:
@@ -118,3 +138,35 @@ update_configs:
           dependency_name: "net.revelc.code.formatter:formatter-maven-plugin"
       - match:
           dependency_name: "net.revelc.code:impsort-maven-plugin"
+      # Narayana
+      - match:
+          dependency_name: "org.jboss.narayana.jta:narayana-jta"
+      - match:
+          dependency_name: "org.jboss.narayana.jts:narayana-jts-integration"
+      - match:
+          dependency_name: "org.jboss.narayana.stm:stm"
+      # Agroal
+      - match:
+          dependency_name: "io.agroal:agroal-api"
+      - match:
+          dependency_name: "io.agroal:agroal-pool"
+      - match:
+          dependency_name: "io.agroal:agroal-narayana"
+      #Jandex
+      - match:
+          dependency_name: "org.jboss:jandex"
+      - match:
+          dependency_name: "org.jboss.jandex:jandex-maven-plugin"
+      #Neo4j
+      - match:
+          dependency_name: "org.neo4j.driver:neo4j-java-driver"
+      #WireMock
+      - match:
+          dependency_name: "com.github.tomakehurst:wiremock-jre8"
+      - match:
+          dependency_name: "uk.co.automatictester:wiremock-maven-plugin"
+  - package_manager: "java:gradle"
+    directory: "/devtools/gradle"
+    update_schedule: "daily"
+    default_labels:
+      - "area/dependencies"

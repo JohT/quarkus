@@ -100,27 +100,87 @@ select the `eclipse.importorder` file as the import order config file.
 * Clone the repository: `git clone https://github.com/quarkusio/quarkus.git`
 * Navigate to the directory: `cd quarkus`
 * Set Maven heap to 1.5GB `export MAVEN_OPTS="-Xmx1563m"`
-* Invoke `./mvnw clean install` from the root directory
+* Invoke `./mvnw clean install -DskipTests -DskipITs -DskipDocs` from the root directory
 
 ```bash
 git clone https://github.com/quarkusio/quarkus.git
 cd quarkus
 export MAVEN_OPTS="-Xmx1563m"
-./mvnw clean install
+./mvnw clean install -DskipTests -DskipITs -DskipDocs
 # Wait... success!
 ```
 
-The default build does not create native images, which is quite time consuming.
+This build skipped all the tests, native-image builds and documentation generation. 
 
-Note that the full build with all tests is quite slow, you will usually want to build with `-DskipTests`. This will also
-skip creation of the integration-test runner jars. If you want to skip tests but still create the runners you can set
-`-DskipTests -Dquarkus.build.skip=false`
+Removing the `-DskipTests -DskipITs` flags enables the tests. 
+It will take much longer to build but will give you more guarantees on your code. 
 
 You can build and test native images in the integration tests supporting it by using `./mvnw install -Dnative`.
 
 By default the build will use the native image server. This speeds up the build, but can cause problems due to the cache
 not being invalidated correctly in some cases. To run a build with a new instance of the server you can use
 `./mvnw install -Dnative-image.new-server=true`.
+
+
+## Usage
+
+After the build was successful, the artifacts are available in your local Maven repository.
+
+To include them into your project a few things have to be changed.
+
+#### With Gradle
+
+
+*gradle.properties*
+
+```
+quarkusPlatformArtifactId=quarkus-bom
+quarkusPluginVersion=999-SNAPSHOT
+quarkusPlatformVersion=999-SNAPSHOT
+quarkusPlatformGroupId=io.quarkus
+```
+
+*settings.gradle*
+
+```
+pluginManagement {
+    repositories {
+        mavenLocal() // add mavenLocal() to first position
+        jcenter()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    .
+    .
+    .
+}
+```
+ 
+*build.gradle*
+
+```
+repositories {
+    mavenLocal() // add mavenLocal() to first position
+    jcenter()
+    mavenCentral()
+}
+```
+
+#### With Maven
+
+*pom.xml*
+
+```
+<properties>
+    <quarkus-plugin.version>999-SNAPSHOT</quarkus-plugin.version>
+    <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+    <quarkus.platform.group-id>io.quarkus</quarkus.platform.group-id>
+    <quarkus.platform.version>999-SNAPSHOT</quarkus.platform.version>
+    .
+    .
+    .
+</properties>
+```
 
 ### MicroProfile TCK's
 

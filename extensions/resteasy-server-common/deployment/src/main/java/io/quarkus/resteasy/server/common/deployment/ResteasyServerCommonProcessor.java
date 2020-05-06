@@ -177,7 +177,8 @@ public class ResteasyServerCommonProcessor {
             JaxrsProvidersToRegisterBuildItem jaxrsProvidersToRegisterBuildItem,
             CombinedIndexBuildItem combinedIndexBuildItem,
             BeanArchiveIndexBuildItem beanArchiveIndexBuildItem,
-            Optional<ResteasyServletMappingBuildItem> resteasyServletMappingBuildItem) throws Exception {
+            Optional<ResteasyServletMappingBuildItem> resteasyServletMappingBuildItem,
+            CustomScopeAnnotationsBuildItem scopes) throws Exception {
         IndexView index = combinedIndexBuildItem.getIndex();
 
         resource.produce(new NativeImageResourceBuildItem("META-INF/services/javax.ws.rs.client.ClientBuilder"));
@@ -228,19 +229,21 @@ public class ResteasyServerCommonProcessor {
 
         Map<DotName, ClassInfo> scannedResources = new HashMap<>();
         Set<DotName> pathInterfaces = new HashSet<>();
-        Set<ClassInfo> withoutDefaultCtor = new HashSet<>();
+        Map<DotName, ClassInfo> withoutDefaultCtor = new HashMap<>();
         for (AnnotationInstance annotation : allPaths) {
             if (annotation.target().kind() == AnnotationTarget.Kind.CLASS) {
                 ClassInfo clazz = annotation.target().asClass();
                 if (!Modifier.isInterface(clazz.flags())) {
-                    String className = clazz.name().toString();
-                    if (!additionalPaths.contains(annotation)) { // scanned resources only contains real JAX-RS resources
-                        scannedResources.putIfAbsent(clazz.name(), clazz);
-                    }
-                    reflectiveClass.produce(new ReflectiveClassBuildItem(true, true, className));
+                    if (!withoutDefaultCtor.containsKey(clazz.name())) {
+                        String className = clazz.name().toString();
+                        if (!additionalPaths.contains(annotation)) { // scanned resources only contains real JAX-RS resources
+                            scannedResources.putIfAbsent(clazz.name(), clazz);
+                        }
+                        reflectiveClass.produce(new ReflectiveClassBuildItem(true, true, className));
 
-                    if (!clazz.hasNoArgsConstructor()) {
-                        withoutDefaultCtor.add(clazz);
+                        if (!clazz.hasNoArgsConstructor()) {
+                            withoutDefaultCtor.put(clazz.name(), clazz);
+                        }
                     }
                 } else {
                     pathInterfaces.add(clazz.name());
@@ -328,17 +331,17 @@ public class ResteasyServerCommonProcessor {
             }
 
             @Override
-            public void transform(TransformationContext transformationContext) {
-                ClassInfo clazz = transformationContext.getTarget().asClass();
+            public void transform(TransformationContext context) {
+                ClassInfo clazz = context.getTarget().asClass();
                 if (clazz.classAnnotation(ResteasyDotNames.PATH) != null) {
                     // Root resources - no need to add scope, @Path is a bean defining annotation
                     if (clazz.classAnnotation(DotNames.TYPED) == null) {
                         // Add @Typed(MyResource.class)
-                        transformationContext.transform().add(createTypedAnnotationInstance(clazz)).done();
+                        context.transform().add(createTypedAnnotationInstance(clazz)).done();
                     }
                     return;
                 }
-                if (BuiltinScope.isIn(clazz.classAnnotations())) {
+                if (scopes.isScopeIn(context.getAnnotations())) {
                     // Skip classes annotated with built-in scope
                     return;
                 }
@@ -347,12 +350,12 @@ public class ResteasyServerCommonProcessor {
                     if (clazz.annotations().containsKey(DotNames.INJECT)
                             || hasAutoInjectAnnotation(autoInjectAnnotationNames, clazz)) {
                         // A provider with an injection point but no built-in scope is @Singleton
-                        transformation = transformationContext.transform().add(BuiltinScope.SINGLETON.getName());
+                        transformation = context.transform().add(BuiltinScope.SINGLETON.getName());
                     }
                     if (clazz.classAnnotation(DotNames.TYPED) == null) {
                         // Add @Typed(MyProvider.class)
                         if (transformation == null) {
-                            transformation = transformationContext.transform();
+                            transformation = context.transform();
                         }
                         transformation.add(createTypedAnnotationInstance(clazz));
                     }
@@ -361,7 +364,7 @@ public class ResteasyServerCommonProcessor {
                     }
                 } else if (subresources.contains(clazz.name())) {
                     // Transform a class annotated with a request method designator
-                    Transformation transformation = transformationContext.transform()
+                    Transformation transformation = context.transform()
                             .add(resteasyConfig.singletonResources ? BuiltinScope.SINGLETON.getName()
                                     : BuiltinScope.DEPENDENT.getName());
                     if (clazz.classAnnotation(DotNames.TYPED) == null) {
@@ -392,24 +395,26 @@ public class ResteasyServerCommonProcessor {
         if (pathInterfaces.isEmpty()) {
             return;
         }
-        Set<ClassInfo> pathInterfaceImplementors = new HashSet<>();
+        Map<DotName, ClassInfo> pathInterfaceImplementors = new HashMap<>();
         for (DotName iface : pathInterfaces) {
             for (ClassInfo implementor : index.getAllKnownImplementors(iface)) {
-                pathInterfaceImplementors.add(implementor);
+                if (!pathInterfaceImplementors.containsKey(implementor.name())) {
+                    pathInterfaceImplementors.put(implementor.name(), implementor);
+                }
             }
         }
         if (!pathInterfaceImplementors.isEmpty()) {
             AdditionalBeanBuildItem.Builder builder = AdditionalBeanBuildItem.builder()
                     .setDefaultScope(resteasyConfig.singletonResources ? BuiltinScope.SINGLETON.getName() : null)
                     .setUnremovable();
-            for (ClassInfo implementor : pathInterfaceImplementors) {
-                if (scopes.isScopeDeclaredOn(implementor)) {
+            for (Map.Entry<DotName, ClassInfo> implementor : pathInterfaceImplementors.entrySet()) {
+                if (scopes.isScopeDeclaredOn(implementor.getValue())) {
                     // It has a scope defined - just mark it as unremovable
                     unremovableBeans
-                            .produce(new UnremovableBeanBuildItem(new BeanClassNameExclusion(implementor.name().toString())));
+                            .produce(new UnremovableBeanBuildItem(new BeanClassNameExclusion(implementor.getKey().toString())));
                 } else {
                     // No built-in scope found - add as additional bean
-                    builder.addBeanClass(implementor.name().toString());
+                    builder.addBeanClass(implementor.getKey().toString());
                 }
             }
             additionalBeans.produce(builder.build());
@@ -564,7 +569,7 @@ public class ResteasyServerCommonProcessor {
     }
 
     private static void generateDefaultConstructors(BuildProducer<BytecodeTransformerBuildItem> transformers,
-            Set<ClassInfo> withoutDefaultCtor,
+            Map<DotName, ClassInfo> withoutDefaultCtor,
             List<AdditionalJaxRsResourceDefiningAnnotationBuildItem> additionalJaxRsResourceDefiningAnnotations) {
 
         final Set<String> allowedAnnotationPrefixes = new HashSet<>(1 + additionalJaxRsResourceDefiningAnnotations.size());
@@ -580,7 +585,8 @@ public class ResteasyServerCommonProcessor {
             }
         }
 
-        for (ClassInfo classInfo : withoutDefaultCtor) {
+        for (Map.Entry<DotName, ClassInfo> entry : withoutDefaultCtor.entrySet()) {
+            final ClassInfo classInfo = entry.getValue();
             // keep it super simple - only generate default constructor is the object is a direct descendant of Object
             if (!(classInfo.superClassType() != null && classInfo.superClassType().name().equals(DotNames.OBJECT))) {
                 return;
@@ -602,7 +608,7 @@ public class ResteasyServerCommonProcessor {
 
             final String name = classInfo.name().toString();
             transformers
-                    .produce(new BytecodeTransformerBuildItem(name, new BiFunction<String, ClassVisitor, ClassVisitor>() {
+                    .produce(new BytecodeTransformerBuildItem(true, name, new BiFunction<String, ClassVisitor, ClassVisitor>() {
                         @Override
                         public ClassVisitor apply(String className, ClassVisitor classVisitor) {
                             ClassVisitor cv = new ClassVisitor(Gizmo.ASM_API_VERSION, classVisitor) {
@@ -755,18 +761,6 @@ public class ResteasyServerCommonProcessor {
                             ResteasyDotNames.IGNORE_FOR_REFLECTION_PREDICATE));
                 }
             }
-        }
-    }
-
-    private static DotName getClassName(Type type) {
-        switch (type.kind()) {
-            case CLASS:
-            case PARAMETERIZED_TYPE:
-                return type.name();
-            case ARRAY:
-                return getClassName(type.asArrayType().component());
-            default:
-                return null;
         }
     }
 

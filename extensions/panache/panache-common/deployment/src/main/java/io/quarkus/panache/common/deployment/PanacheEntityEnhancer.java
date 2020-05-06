@@ -1,5 +1,7 @@
 package io.quarkus.panache.common.deployment;
 
+import java.lang.reflect.Modifier;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -39,13 +41,19 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
     private static final String JAXB_TRANSIENT_BINARY_NAME = "javax/xml/bind/annotation/XmlTransient";
     private static final String JAXB_TRANSIENT_SIGNATURE = "L" + JAXB_TRANSIENT_BINARY_NAME + ";";
 
+    private static final String JSON_PROPERTY_BINARY_NAME = "com/fasterxml/jackson/annotation/JsonProperty";
+    private static final String JSON_PROPERTY_SIGNATURE = "L" + JSON_PROPERTY_BINARY_NAME + ";";
+
     protected MetamodelType modelInfo;
     protected final ClassInfo panacheEntityBaseClassInfo;
     protected final IndexView indexView;
+    protected final List<PanacheMethodCustomizer> methodCustomizers;
 
-    public PanacheEntityEnhancer(IndexView index, DotName panacheEntityBaseName) {
+    public PanacheEntityEnhancer(IndexView index, DotName panacheEntityBaseName,
+            List<PanacheMethodCustomizer> methodCustomizers) {
         this.panacheEntityBaseClassInfo = index.getClassByName(panacheEntityBaseName);
         this.indexView = index;
+        this.methodCustomizers = methodCustomizers;
     }
 
     @Override
@@ -55,16 +63,18 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
 
         protected Type thisClass;
         protected Map<String, ? extends EntityFieldType> fields;
-        // set of name + "/" + descriptor (only for suspected accessor names)
-        private Set<String> methods = new HashSet<>();
+        // set of name + "/" + descriptor
+        private Set<String> userMethods = new HashSet<>();
         private MetamodelInfo<?> modelInfo;
         private ClassInfo panacheEntityBaseClassInfo;
         protected ClassInfo entityInfo;
+        protected List<PanacheMethodCustomizer> methodCustomizers;
 
         public PanacheEntityClassVisitor(String className, ClassVisitor outputClassVisitor,
                 MetamodelInfo<? extends EntityModel<? extends EntityFieldType>> modelInfo,
                 ClassInfo panacheEntityBaseClassInfo,
-                ClassInfo entityInfo) {
+                ClassInfo entityInfo,
+                List<PanacheMethodCustomizer> methodCustomizers) {
             super(Gizmo.ASM_API_VERSION, outputClassVisitor);
             thisClass = Type.getType("L" + className.replace('.', '/') + ";");
             this.modelInfo = modelInfo;
@@ -72,6 +82,7 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
             fields = entityModel != null ? entityModel.fields : null;
             this.panacheEntityBaseClassInfo = panacheEntityBaseClassInfo;
             this.entityInfo = entityInfo;
+            this.methodCustomizers = methodCustomizers;
         }
 
         @Override
@@ -101,8 +112,11 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
 
                 @Override
                 public void visitEnd() {
-                    // add the @JaxbTransient property to the field so that Jackson prefers the generated getter
-                    // jsonb will already use the getter so we're good
+                    // Add the @JaxbTransient property to the field so that JAXB prefers the generated getter (otherwise JAXB complains about
+                    // having a field and property both with the same name)
+                    // JSONB will already use the getter so we're good
+                    // Note: we don't need to check if we already have @XmlTransient in the descriptors because if we did, we moved it to the getter
+                    // so we can't have any duplicate
                     super.visitAnnotation(JAXB_TRANSIENT_SIGNATURE, true);
                     super.visitEnd();
                 }
@@ -112,12 +126,21 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
         @Override
         public MethodVisitor visitMethod(int access, String methodName, String descriptor, String signature,
                 String[] exceptions) {
-            if (methodName.startsWith("get")
-                    || methodName.startsWith("set")
-                    || methodName.startsWith("is")) {
-                methods.add(methodName + "/" + descriptor);
-            }
+            userMethods.add(methodName + "/" + descriptor);
             MethodVisitor superVisitor = super.visitMethod(access, methodName, descriptor, signature, exceptions);
+            if (Modifier.isStatic(access)
+                    && Modifier.isPublic(access)
+                    && (access & Opcodes.ACC_SYNTHETIC) == 0
+                    && !methodCustomizers.isEmpty()) {
+                org.jboss.jandex.Type[] argTypes = JandexUtil.getParameterTypes(descriptor);
+                MethodInfo method = this.entityInfo.method(methodName, argTypes);
+                if (method == null) {
+                    throw new IllegalStateException(
+                            "Could not find indexed method: " + thisClass + "." + methodName + " with descriptor " + descriptor
+                                    + " and arg types " + Arrays.toString(argTypes));
+                }
+                superVisitor = new PanacheMethodCustomizerVisitor(superVisitor, method, thisClass, methodCustomizers);
+            }
             return new PanacheFieldAccessMethodVisitor(superVisitor, thisClass.getInternalName(), methodName, descriptor,
                     modelInfo);
         }
@@ -128,7 +151,8 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
 
             for (MethodInfo method : panacheEntityBaseClassInfo.methods()) {
                 // Do not generate a method that already exists
-                if (!JandexUtil.containsMethod(entityInfo, method)) {
+                String descriptor = JandexUtil.getDescriptor(method, name -> null);
+                if (!userMethods.contains(method.name() + "/" + descriptor)) {
                     AnnotationInstance bridge = method.annotation(JandexUtil.DOTNAME_GENERATE_BRIDGE);
                     if (bridge != null) {
                         generateMethod(method, bridge.value("targetReturnTypeErased"));
@@ -159,6 +183,9 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
                 mv.visitParameter(method.parameterName(i), 0 /* modifiers */);
             }
             mv.visitCode();
+            for (PanacheMethodCustomizer customizer : methodCustomizers) {
+                customizer.customize(thisClass, method, mv);
+            }
             // inject model
             injectModel(mv);
             for (int i = 0; i < parameters.size(); i++) {
@@ -196,7 +223,7 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
                 // Getter
                 String getterName = field.getGetterName();
                 String getterDescriptor = "()" + field.descriptor;
-                if (!methods.contains(getterName + "/" + getterDescriptor)) {
+                if (!userMethods.contains(getterName + "/" + getterDescriptor)) {
                     MethodVisitor mv = super.visitMethod(Opcodes.ACC_PUBLIC,
                             getterName, getterDescriptor, field.signature == null ? null : "()" + field.signature, null);
                     mv.visitCode();
@@ -209,13 +236,18 @@ public abstract class PanacheEntityEnhancer<MetamodelType extends MetamodelInfo<
                     for (EntityFieldAnnotation anno : field.annotations) {
                         anno.writeToVisitor(mv);
                     }
+                    // Add an explicit Jackson annotation so that the entire property is not ignored due to having @XmlTransient
+                    // on the field
+                    if (!field.hasAnnotation(JSON_PROPERTY_SIGNATURE)) {
+                        mv.visitAnnotation(JSON_PROPERTY_SIGNATURE, true);
+                    }
                     mv.visitEnd();
                 }
 
                 // Setter
                 String setterName = field.getSetterName();
                 String setterDescriptor = "(" + field.descriptor + ")V";
-                if (!methods.contains(setterName + "/" + setterDescriptor)) {
+                if (!userMethods.contains(setterName + "/" + setterDescriptor)) {
                     MethodVisitor mv = super.visitMethod(Opcodes.ACC_PUBLIC,
                             setterName, setterDescriptor, field.signature == null ? null : "(" + field.signature + ")V", null);
                     mv.visitCode();

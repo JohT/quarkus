@@ -93,6 +93,7 @@ public class QuarkusUnitTest
 
     private Class<?> actualTestClass;
     private Object actualTestInstance;
+    private String[] commandLineParameters = new String[0];
 
     private boolean allowTestClassOutsideDeployment;
 
@@ -171,6 +172,15 @@ public class QuarkusUnitTest
      */
     public QuarkusUnitTest setForcedDependencies(List<AppArtifact> forcedDependencies) {
         this.forcedDependencies = forcedDependencies;
+        return this;
+    }
+
+    public String[] getCommandLineParameters() {
+        return commandLineParameters;
+    }
+
+    public QuarkusUnitTest setCommandLineParameters(String... commandLineParameters) {
+        this.commandLineParameters = commandLineParameters;
         return this;
     }
 
@@ -324,7 +334,7 @@ public class QuarkusUnitTest
 
                 @Override
                 public void close() throws Throwable {
-                    manager.stop();
+                    manager.close();
                 }
             });
         }
@@ -367,7 +377,8 @@ public class QuarkusUnitTest
             final Path testLocation = PathTestHelper.getTestClassesLocation(testClass);
 
             try {
-                QuarkusBootstrap.Builder builder = QuarkusBootstrap.builder(deploymentDir)
+                QuarkusBootstrap.Builder builder = QuarkusBootstrap.builder()
+                        .setApplicationRoot(deploymentDir)
                         .setMode(QuarkusBootstrap.Mode.TEST)
                         .addExcludedPath(testLocation)
                         .setProjectRoot(testLocation)
@@ -384,7 +395,7 @@ public class QuarkusUnitTest
 
                 runningQuarkusApplication = new AugmentActionImpl(curatedApplication, customizers)
                         .createInitialRuntimeApplication()
-                        .run(new String[0]);
+                        .run(commandLineParameters);
                 //we restore the CL at the end of the test
                 Thread.currentThread().setContextClassLoader(runningQuarkusApplication.getClassLoader());
                 if (assertException != null) {
@@ -451,7 +462,9 @@ public class QuarkusUnitTest
             if (afterUndeployListener != null) {
                 afterUndeployListener.run();
             }
-            curatedApplication.close();
+            if (curatedApplication != null) {
+                curatedApplication.close();
+            }
         } finally {
             System.clearProperty("test.url");
             Thread.currentThread().setContextClassLoader(originalClassLoader);
@@ -460,9 +473,10 @@ public class QuarkusUnitTest
             if (deploymentDir != null) {
                 FileUtil.deleteDirectory(deploymentDir);
             }
-        }
-        if (afterAllCustomizer != null) {
-            afterAllCustomizer.run();
+
+            if (afterAllCustomizer != null) {
+                afterAllCustomizer.run();
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package io.quarkus.amazon.lambda.deployment;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -19,6 +20,7 @@ import org.jboss.logging.Logger;
 import org.joda.time.DateTime;
 
 import com.amazonaws.services.lambda.runtime.RequestHandler;
+import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
 
 import io.quarkus.amazon.lambda.runtime.AmazonLambdaRecorder;
 import io.quarkus.amazon.lambda.runtime.FunctionError;
@@ -37,9 +39,10 @@ import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
-import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
+import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
+import io.quarkus.deployment.pkg.builditem.OutputTargetBuildItem;
 import io.quarkus.deployment.pkg.steps.NativeBuild;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.runtime.LaunchMode;
@@ -49,6 +52,8 @@ public final class AmazonLambdaProcessor {
     public static final String AWS_LAMBDA_EVENTS_ARCHIVE_MARKERS = "com/amazonaws/services/lambda/runtime/events";
 
     private static final DotName REQUEST_HANDLER = DotName.createSimple(RequestHandler.class.getName());
+    private static final DotName REQUEST_STREAM_HANDLER = DotName.createSimple(RequestStreamHandler.class.getName());
+    private static final DotName SKILL_STREAM_HANDLER = DotName.createSimple("com.amazon.ask.SkillStreamHandler");
 
     private static final DotName NAMED = DotName.createSimple(Named.class.getName());
     private static final Logger log = Logger.getLogger(AmazonLambdaProcessor.class);
@@ -69,7 +74,13 @@ public final class AmazonLambdaProcessor {
             BuildProducer<AdditionalBeanBuildItem> additionalBeanBuildItemBuildProducer,
             BuildProducer<ReflectiveHierarchyBuildItem> reflectiveHierarchy,
             BuildProducer<ReflectiveClassBuildItem> reflectiveClassBuildItemBuildProducer) throws BuildException {
+
         Collection<ClassInfo> allKnownImplementors = combinedIndexBuildItem.getIndex().getAllKnownImplementors(REQUEST_HANDLER);
+        allKnownImplementors.addAll(combinedIndexBuildItem.getIndex()
+                .getAllKnownImplementors(REQUEST_STREAM_HANDLER));
+        allKnownImplementors.addAll(combinedIndexBuildItem.getIndex()
+                .getAllKnownSubclasses(SKILL_STREAM_HANDLER));
+
         if (allKnownImplementors.size() > 0 && providedLambda.isPresent()) {
             throw new BuildException(
                     "Multiple handler classes.  You have a custom handler class and the " + providedLambda.get().getProvider()
@@ -81,33 +92,43 @@ public final class AmazonLambdaProcessor {
         List<AmazonLambdaBuildItem> ret = new ArrayList<>();
 
         for (ClassInfo info : allKnownImplementors) {
+            if (Modifier.isAbstract(info.flags())) {
+                continue;
+            }
+
             final DotName name = info.name();
-            builder.addBeanClass(name.toString());
+            final String lambda = name.toString();
+            builder.addBeanClass(lambda);
+            reflectiveClassBuildItemBuildProducer.produce(new ReflectiveClassBuildItem(true, false, lambda));
+
             String cdiName = null;
             List<AnnotationInstance> named = info.annotations().get(NAMED);
             if (named != null && !named.isEmpty()) {
                 cdiName = named.get(0).value().asString();
             }
 
-            final String lambda = name.toString();
-            ret.add(new AmazonLambdaBuildItem(lambda, cdiName));
-            reflectiveClassBuildItemBuildProducer.produce(new ReflectiveClassBuildItem(true, false, lambda));
-
             ClassInfo current = info;
             boolean done = false;
+            boolean streamHandler = info.superName().equals(SKILL_STREAM_HANDLER) ? true : false;
             while (current != null && !done) {
                 for (MethodInfo method : current.methods()) {
-                    if (method.name().equals("handleRequest")
-                            && method.parameters().size() == 2
-                            && !method.parameters().get(0).name().equals(DotName.createSimple(Object.class.getName()))) {
-                        reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem(method.parameters().get(0)));
-                        reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem(method.returnType()));
-                        done = true;
-                        break;
+                    if (method.name().equals("handleRequest")) {
+                        if (method.parameters().size() == 3) {
+                            streamHandler = true;
+                            done = true;
+                            break;
+                        } else if (method.parameters().size() == 2
+                                && !method.parameters().get(0).name().equals(DotName.createSimple(Object.class.getName()))) {
+                            reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem(method.parameters().get(0)));
+                            reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem(method.returnType()));
+                            done = true;
+                            break;
+                        }
                     }
                 }
                 current = combinedIndexBuildItem.getIndex().getClassByName(current.superName());
             }
+            ret.add(new AmazonLambdaBuildItem(lambda, cdiName, streamHandler));
         }
         additionalBeanBuildItemBuildProducer.produce(builder.build());
         reflectiveClassBuildItemBuildProducer
@@ -159,21 +180,50 @@ public final class AmazonLambdaProcessor {
             List<ServiceStartBuildItem> orderServicesFirst, // try to order this after service recorders
             RecorderContext context) {
         if (providedLambda.isPresent()) {
-            Class<? extends RequestHandler<?, ?>> handlerClass = (Class<? extends RequestHandler<?, ?>>) context
-                    .classProxy(providedLambda.get().getHandlerClass().getName());
-            recorder.setHandlerClass(handlerClass, beanContainerBuildItem.getValue());
+            boolean useStreamHandler = false;
+            for (Class handleInterface : providedLambda.get().getHandlerClass().getInterfaces()) {
+                if (handleInterface.getName().equals(RequestStreamHandler.class.getName())) {
+                    useStreamHandler = true;
+                }
+            }
 
+            if (useStreamHandler) {
+                Class<? extends RequestStreamHandler> handlerClass = (Class<? extends RequestStreamHandler>) context
+                        .classProxy(providedLambda.get().getHandlerClass().getName());
+                recorder.setStreamHandlerClass(handlerClass, beanContainerBuildItem.getValue());
+            } else {
+                Class<? extends RequestHandler<?, ?>> handlerClass = (Class<? extends RequestHandler<?, ?>>) context
+                        .classProxy(providedLambda.get().getHandlerClass().getName());
+
+                recorder.setHandlerClass(handlerClass, beanContainerBuildItem.getValue());
+            }
         } else if (lambdas != null) {
             List<Class<? extends RequestHandler<?, ?>>> unnamed = new ArrayList<>();
             Map<String, Class<? extends RequestHandler<?, ?>>> named = new HashMap<>();
+
+            List<Class<? extends RequestStreamHandler>> unnamedStreamHandler = new ArrayList<>();
+            Map<String, Class<? extends RequestStreamHandler>> namedStreamHandler = new HashMap<>();
+
             for (AmazonLambdaBuildItem i : lambdas) {
-                if (i.getName() == null) {
-                    unnamed.add((Class<? extends RequestHandler<?, ?>>) context.classProxy(i.getHandlerClass()));
+                if (i.isStreamHandler()) {
+                    if (i.getName() == null) {
+                        unnamedStreamHandler
+                                .add((Class<? extends RequestStreamHandler>) context.classProxy(i.getHandlerClass()));
+                    } else {
+                        namedStreamHandler.put(i.getName(),
+                                (Class<? extends RequestStreamHandler>) context.classProxy(i.getHandlerClass()));
+                    }
                 } else {
-                    named.put(i.getName(), (Class<? extends RequestHandler<?, ?>>) context.classProxy(i.getHandlerClass()));
+                    if (i.getName() == null) {
+                        unnamed.add((Class<? extends RequestHandler<?, ?>>) context.classProxy(i.getHandlerClass()));
+                    } else {
+                        named.put(i.getName(), (Class<? extends RequestHandler<?, ?>>) context.classProxy(i.getHandlerClass()));
+                    }
                 }
             }
-            recorder.chooseHandlerClass(unnamed, named, beanContainerBuildItem.getValue(), config);
+
+            recorder.chooseHandlerClass(unnamed, named, unnamedStreamHandler, namedStreamHandler,
+                    beanContainerBuildItem.getValue(), config);
         }
     }
 
@@ -189,26 +239,6 @@ public final class AmazonLambdaProcessor {
         recorder.startPollLoop(shutdownContextBuildItem);
     }
 
-    /**
-     * Lambda custom runtime does not like ipv6.
-     */
-    @BuildStep(onlyIf = NativeBuild.class)
-    void ipv4Only(BuildProducer<SystemPropertyBuildItem> systemProperty) {
-        // lambda custom runtime does not like IPv6
-        systemProperty.produce(new SystemPropertyBuildItem("java.net.preferIPv4Stack", "true"));
-    }
-
-    @BuildStep
-    void tmpdirs(BuildProducer<SystemPropertyBuildItem> systemProperty,
-            LaunchModeBuildItem launchModeBuildItem) {
-        LaunchMode mode = launchModeBuildItem.getLaunchMode();
-        if (mode.isDevOrTest()) {
-            return; // just in case we're on windows.
-        }
-        systemProperty.produce(new SystemPropertyBuildItem("java.io.tmpdir", "/tmp"));
-        systemProperty.produce(new SystemPropertyBuildItem("vertx.cacheDirBase", "/tmp/vertx"));
-    }
-
     @BuildStep
     @Record(value = ExecutionTime.RUNTIME_INIT)
     void enableNativeEventLoop(LambdaBuildTimeConfig config,
@@ -220,6 +250,30 @@ public final class AmazonLambdaProcessor {
         if (config.enablePollingJvmMode && mode.isDevOrTest()) {
             recorder.startPollLoop(shutdownContextBuildItem);
         }
+    }
+
+    @BuildStep
+    public void generateScripts(OutputTargetBuildItem target,
+            Optional<ProvidedAmazonLambdaHandlerBuildItem> providedLambda,
+            BuildProducer<ArtifactResultBuildItem> artifactResultProducer) throws Exception {
+        if (providedLambda.isPresent())
+            return; // assume these will be generated elsewhere
+        String output = LambdaUtil.copyResource("lambda/bootstrap-example.sh");
+        LambdaUtil.writeFile(target, "bootstrap-example.sh", output);
+
+        String lambdaName = LambdaUtil.artifactToLambda(target.getBaseName());
+
+        output = LambdaUtil.copyResource("lambda/manage.sh")
+                .replace("${lambdaName}", lambdaName);
+        LambdaUtil.writeFile(target, "manage.sh", output);
+
+        output = LambdaUtil.copyResource("lambda/sam.jvm.yaml")
+                .replace("${lambdaName}", lambdaName);
+        LambdaUtil.writeFile(target, "sam.jvm.yaml", output);
+
+        output = LambdaUtil.copyResource("lambda/sam.native.yaml")
+                .replace("${lambdaName}", lambdaName);
+        LambdaUtil.writeFile(target, "sam.native.yaml", output);
     }
 
 }

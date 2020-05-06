@@ -26,6 +26,7 @@ import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.ApplicationArchivesBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
+import io.quarkus.deployment.builditem.LiveReloadBuildItem;
 import io.quarkus.deployment.index.IndexingUtil;
 
 public class BeanArchiveProcessor {
@@ -45,8 +46,8 @@ public class BeanArchiveProcessor {
     @Inject
     BuildProducer<GeneratedClassBuildItem> generatedClass;
 
-    @BuildStep(loadsApplicationClasses = true)
-    public BeanArchiveIndexBuildItem build() throws Exception {
+    @BuildStep
+    public BeanArchiveIndexBuildItem build(LiveReloadBuildItem liveReloadBuildItem) throws Exception {
 
         // First build an index from application archives
         IndexView applicationIndex = buildApplicationIndex();
@@ -64,17 +65,24 @@ public class BeanArchiveProcessor {
                     Thread.currentThread().getContextClassLoader());
         }
         Set<DotName> generatedClassNames = new HashSet<>();
-        for (GeneratedBeanBuildItem beanClass : generatedBeans) {
-            IndexingUtil.indexClass(beanClass.getName(), additionalBeanIndexer, applicationIndex, additionalIndex,
+        for (GeneratedBeanBuildItem generatedBeanClass : generatedBeans) {
+            IndexingUtil.indexClass(generatedBeanClass.getName(), additionalBeanIndexer, applicationIndex, additionalIndex,
                     Thread.currentThread().getContextClassLoader(),
-                    beanClass.getData());
-            generatedClassNames.add(DotName.createSimple(beanClass.getName().replace('/', '.')));
-            generatedClass.produce(new GeneratedClassBuildItem(true, beanClass.getName(), beanClass.getData()));
+                    generatedBeanClass.getData());
+            generatedClassNames.add(DotName.createSimple(generatedBeanClass.getName().replace('/', '.')));
+            generatedClass.produce(new GeneratedClassBuildItem(true, generatedBeanClass.getName(), generatedBeanClass.getData(),
+                    generatedBeanClass.getSource()));
+        }
+
+        BeanArchives.PersistentClassIndex index = liveReloadBuildItem.getContextObject(BeanArchives.PersistentClassIndex.class);
+        if (index == null) {
+            index = new BeanArchives.PersistentClassIndex();
+            liveReloadBuildItem.setContextObject(BeanArchives.PersistentClassIndex.class, index);
         }
 
         // Finally, index ArC/CDI API built-in classes
         return new BeanArchiveIndexBuildItem(
-                BeanArchives.buildBeanArchiveIndex(Thread.currentThread().getContextClassLoader(), applicationIndex,
+                BeanArchives.buildBeanArchiveIndex(Thread.currentThread().getContextClassLoader(), index, applicationIndex,
                         additionalBeanIndexer.complete()),
                 generatedClassNames,
                 additionalBeans);

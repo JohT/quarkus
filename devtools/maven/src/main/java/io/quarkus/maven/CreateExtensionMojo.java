@@ -46,9 +46,7 @@ import freemarker.template.Template;
 import freemarker.template.TemplateException;
 import freemarker.template.TemplateExceptionHandler;
 import io.quarkus.bootstrap.resolver.maven.MavenArtifactResolver;
-import io.quarkus.bootstrap.resolver.maven.MavenRepoInitializer;
 import io.quarkus.bootstrap.resolver.maven.workspace.LocalProject;
-import io.quarkus.bootstrap.resolver.maven.workspace.LocalWorkspace;
 import io.quarkus.maven.utilities.MojoUtils;
 import io.quarkus.maven.utilities.PomTransformer;
 import io.quarkus.maven.utilities.PomTransformer.Gavtcs;
@@ -604,12 +602,11 @@ public class CreateExtensionMojo extends AbstractMojo {
                     final DefaultArtifact rootArtifact = new DefaultArtifact(getGroupId(rootModel),
                             rootModel.getArtifactId(), null, rootModel.getPackaging(), getVersion(rootModel));
                     try {
-                        final LocalWorkspace ws = LocalProject.loadWorkspace(rootPom.getParentFile().toPath()).getWorkspace();
                         final MavenArtifactResolver mvn = MavenArtifactResolver.builder()
-                                .setRepositorySystem(MavenRepoInitializer.getRepositorySystem(repoSession.isOffline(), ws))
+                                .setRepositorySystem(repoSystem)
                                 .setRepositorySystemSession(repoSession)
                                 .setRemoteRepositories(repos)
-                                .setWorkspace(LocalProject.loadWorkspace(rootPom.getParentFile().toPath()).getWorkspace())
+                                .setCurrentProject(LocalProject.loadWorkspace(rootPom.getParentFile().toPath()))
                                 .build();
                         final ArtifactDescriptorResult rootDescr = mvn.resolveDescriptor(rootArtifact);
                         importDeploymentBom = !hasQuarkusDeploymentBom(rootDescr.getManagedDependencies());
@@ -629,12 +626,11 @@ public class CreateExtensionMojo extends AbstractMojo {
                     final DefaultArtifact rootArtifact = new DefaultArtifact(getGroupId(rootModel),
                             rootModel.getArtifactId(), null, rootModel.getPackaging(), getVersion(rootModel));
                     try {
-                        final LocalWorkspace ws = LocalProject.loadWorkspace(rootPom.getParentFile().toPath()).getWorkspace();
                         final MavenArtifactResolver mvn = MavenArtifactResolver.builder()
-                                .setRepositorySystem(MavenRepoInitializer.getRepositorySystem(repoSession.isOffline(), ws))
+                                .setRepositorySystem(repoSystem)
                                 .setRepositorySystemSession(repoSession)
                                 .setRemoteRepositories(repos)
-                                .setWorkspace(ws)
+                                .setCurrentProject(LocalProject.loadWorkspace(rootPom.getParentFile().toPath()))
                                 .build();
                         final ArtifactDescriptorResult rootDescr = mvn.resolveDescriptor(rootArtifact);
                         importDeploymentBom = !hasQuarkusDeploymentBom(rootDescr.getManagedDependencies());

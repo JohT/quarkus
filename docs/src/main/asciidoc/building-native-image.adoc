@@ -47,6 +47,7 @@ sudo apt-get install build-essential libz-dev zlib1g-dev
 ----
 xcode-select --install
 ----
+* On Windows, you will need to install the https://aka.ms/vs/15/release/vs_buildtools.exe[Visual Studio 2017 Visual C++ Build Tools]
 ====
 
 [[configuring-graalvm]]
@@ -60,7 +61,7 @@ If you cannot install GraalVM, you can use a multi-stage Docker build to run Mav
 Version {graalvm-version} is required. Using the community edition is enough.
 
 1. Install GraalVM if you haven't already. You have a few options for this:
-** Use platform-specific install tools like https://github.com/graalvm/homebrew-tap[homebrew] or https://sdkman.io/jdks#Oracle[sdkman].
+** Use platform-specific install tools like https://github.com/graalvm/homebrew-tap[homebrew], https://sdkman.io/jdks#Oracle[sdkman], or https://github.com/ScoopInstaller/Java[scoop].
 ** Download the appropriate Community Edition archive from <https://github.com/graalvm/graalvm-ce-builds/releases>, and unpack it like you would any other JDK.
 2. Configure the runtime environment. Set `GRAALVM_HOME` environment variable to the GraalVM installation directory, for example:
 +
@@ -75,6 +76,13 @@ On macOS, point the variable to the `Home` sub-directory:
 ----
 export GRAALVM_HOME=$HOME/Development/graalvm/Contents/Home/
 ----
++
+On Windows, you will have to go through the Control Panel to set your environment variables.
++
+[TIP]
+====
+Installing via scoop will do this for you.
+====
 3. Install the `native-image` tool using `gu install`:
 +
 [source,shell]
@@ -158,6 +166,22 @@ just pass -Dquarkus.package.type=native as a property on the command line, howev
 this allows native image tests to also be run.
 
 Create a native executable using: `./mvnw package -Pnative`.
+
+[[graal-and-windows]]
+[NOTE]
+.Issues with packaging on Windows
+====
+The Microsoft Native Tools for Visual Studio must first be initialized before packaging. You can do this by starting
+the `x64 Native Tools Command Prompt` that was installed with the Visual Studio Build Tools. At 
+`x64 Native Tools Command Prompt` you can navigate to your project folder and run `mvnw package -Pnative`.
+
+Another solution is to write a script to do this for you:
+
+[source,shell]
+----
+cmd /c 'call "C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvars64.bat" && mvn package -Pnative'
+----
+====
 
 In addition to the regular files, the build also produces `target/getting-started-1.0-SNAPSHOT-runner`.
 You can run it using: `./target/getting-started-1.0-SNAPSHOT-runner`.
@@ -274,7 +298,8 @@ target directory you can specify the executable with the `-Dnative.image.path=` 
 
 == Creating a container
 
-IMPORTANT: Before going further, be sure to have a working container runtime (Docker, podman) environment.
+IMPORTANT: Before going further, be sure to have a working container runtime (Docker, podman) environment. If you use Docker 
+on Windows you should share your project's drive at Docker Desktop file share settings.
 
 You can run the application in a container using the JAR produced by the Quarkus Maven Plugin.
 However, in this guide we focus on creating a container image using the produced native executable.
@@ -320,6 +345,20 @@ EXPOSE 8080
 CMD ["./application", "-Dquarkus.http.host=0.0.0.0"]
 ----
 
+[NOTE]
+.Ubi?
+====
+The provided `Dockerfiles` use https://access.redhat.com/containers/?tab=overview#/registry.access.redhat.com/ubi8/ubi[UBI] (Universal Base Image) as parent image.
+This base image has been tailored to work perfectly in containers.
+The `Dockerfiles` use the https://access.redhat.com/containers/#/registry.access.redhat.com/ubi8/ubi-minimal[_minimal_ version] of the base image to reduce the size of the produced image.
+
+You can read more about UBI on:
+
+* https://access.redhat.com/containers/?tab=overview#/registry.access.redhat.com/ubi8/ubi[the UBI image page]
+* https://access.redhat.com/containers/#/registry.access.redhat.com/ubi8/ubi-minimal[the _UBI-minimal_ image page]
+* https://access.redhat.com/containers/?tab=tags#/registry.access.redhat.com/ubi8/ubi-minimal[the list of _UBI-minimal_ tags]
+====
+
 Then, if you didn't delete the generated native executable, you can build the docker image with:
 
 [source,shell]
@@ -348,8 +387,9 @@ In this guide we will use the first stage to generate the native executable usin
 ----
 ## Stage 1 : build with maven builder image with native capabilities
 FROM quay.io/quarkus/centos-quarkus-maven:{graalvm-flavor} AS build
+COPY pom.xml /usr/src/app/
+RUN mvn -f /usr/src/app/pom.xml -B de.qaware.maven:go-offline-maven-plugin:1.2.5:resolve-dependencies
 COPY src /usr/src/app/src
-COPY pom.xml /usr/src/app
 USER root
 RUN chown -R quarkus /usr/src/app
 USER quarkus
@@ -359,8 +399,16 @@ RUN mvn -f /usr/src/app/pom.xml -Pnative clean package
 FROM registry.access.redhat.com/ubi8/ubi-minimal
 WORKDIR /work/
 COPY --from=build /usr/src/app/target/*-runner /work/application
-RUN chmod 775 /work
+
+# set up permissions for user `1001`
+RUN chmod 775 /work /work/application \
+  && chown -R 1001 /work \
+  && chmod -R "g+rwX" /work \
+  && chown -R 1001:root /work
+
 EXPOSE 8080
+USER 1001
+
 CMD ["./application", "-Dquarkus.http.host=0.0.0.0"]
 ----
 
